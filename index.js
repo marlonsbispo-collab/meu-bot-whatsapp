@@ -10,26 +10,21 @@ const { google } = require('googleapis');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ==========================================
-// 1. CONFIGURAÇÕES E VARIÁVEIS DE AMBIENTE
-// ==========================================
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const CALENDAR_ID = process.env.CALENDAR_ID || 'primary';
 const GOOGLE_CREDENTIALS_JSON = process.env.GOOGLE_CREDENTIALS_JSON;
 const EXCEL_PATH = './base_dados.xlsx';
+const MODEL_NAME = 'gemini-3.8-flash';
 
 let qrCodeAtual = null;
 let statusConexao = 'Aguardando geração do QR Code...';
 
-// ==========================================
-// 2. PÁGINA WEB PARA ESCANEAR O QR CODE
-// ==========================================
 app.get('/', async (req, res) => {
     if (statusConexao === 'Conectado!') {
         return res.send(`
             <div style="font-family: sans-serif; text-align: center; margin-top: 50px;">
                 <h1 style="color: #25D366;">✅ WhatsApp Conectado com Sucesso!</h1>
-                <p>Seu Agente IA já está ativo. Você já pode fechar esta página e mandar mensagens ou sua planilha Excel pelo WhatsApp.</p>
+                <p>O seu Agente IA já está ativo.</p>
             </div>
         `);
     }
@@ -38,25 +33,15 @@ app.get('/', async (req, res) => {
         return res.send(`
             <div style="font-family: sans-serif; text-align: center; margin-top: 40px;">
                 <h2>Escaneie o QR Code abaixo com o seu WhatsApp</h2>
-                <p>No celular, vá em: <b>Configurações / Mais opções > Aparelhos conectados > Conectar aparelho</b></p>
                 <img src="${qrImage}" style="width: 300px; height: 300px; border: 2px solid #ccc; border-radius: 10px;"/>
-                <p><small>Atualize a página (F5) após escanear.</small></p>
             </div>
         `);
     }
-    res.send(`
-        <div style="font-family: sans-serif; text-align: center; margin-top: 50px;">
-            <h2>Status: ${statusConexao}</h2>
-            <p>Aguarde 5 segundos e atualize a página (F5)...</p>
-        </div>
-    `);
+    res.send(`<div style="font-family: sans-serif; text-align: center; margin-top: 50px;"><h2>Status: ${statusConexao}</h2></div>`);
 });
 
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor na porta ${PORT}`));
 
-// ==========================================
-// 3. FUNÇÕES DO GOOGLE CALENDAR E EXCEL
-// ==========================================
 function obterAgenda() {
     if (!GOOGLE_CREDENTIALS_JSON) return null;
     const credentials = JSON.parse(GOOGLE_CREDENTIALS_JSON);
@@ -71,7 +56,6 @@ async function listarEventosAgenda(dias = 7) {
     try {
         const calendar = obterAgenda();
         if (!calendar) return "Agenda ainda não configurada nas variáveis de ambiente.";
-        
         const agora = new Date();
         const limite = new Date();
         limite.setDate(agora.getDate() + dias);
@@ -86,7 +70,6 @@ async function listarEventosAgenda(dias = 7) {
 
         const eventos = res.data.items;
         if (!eventos || eventos.length === 0) return `Nenhum compromisso para os próximos ${dias} dias.`;
-        
         return eventos.map(e => `- ${e.start.dateTime || e.start.date}: ${e.summary}`).join('\n');
     } catch (err) {
         return `Erro ao consultar agenda: ${err.message}`;
@@ -97,7 +80,6 @@ async function criarEventoAgenda(titulo, dataHoraInicio, duracaoMinutos = 60, de
     try {
         const calendar = obterAgenda();
         if (!calendar) return "Agenda ainda não configurada.";
-
         const inicio = new Date(dataHoraInicio);
         const fim = new Date(inicio.getTime() + duracaoMinutos * 60000);
 
@@ -118,7 +100,7 @@ async function criarEventoAgenda(titulo, dataHoraInicio, duracaoMinutos = 60, de
 
 function consultarPlanilhaExcel(termoBusca = "") {
     if (!fs.existsSync(EXCEL_PATH)) {
-        return "Nenhuma planilha foi enviada ainda. Envie um arquivo .xlsx aqui no chat do WhatsApp.";
+        return "Nenhuma folha de cálculo foi enviada ainda. Envie um ficheiro .xlsx aqui no chat do WhatsApp.";
     }
     try {
         const workbook = xlsx.readFile(EXCEL_PATH);
@@ -143,20 +125,19 @@ function consultarPlanilhaExcel(termoBusca = "") {
 
         return resultado.join('\n\n').substring(0, 14000);
     } catch (err) {
-        return `Erro ao ler planilha: ${err.message}`;
+        return `Erro ao ler Excel: ${err.message}`;
     }
 }
 
-// Declaração das ferramentas para o Gemini
 const ferramentas = [{
     functionDeclarations: [
         {
             name: "consultarPlanilhaExcel",
-            description: "Lê e pesquisa dados na planilha Excel enviada pelo usuário no WhatsApp.",
+            description: "Lê e pesquisa dados na folha de cálculo Excel enviada pelo utilizador no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou status para filtrar (ou vazio para ver resumo geral)." }
+                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou estado para filtrar (ou vazio para ver resumo geral)." }
                 }
             }
         },
@@ -166,7 +147,7 @@ const ferramentas = [{
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    dias: { type: Type.NUMBER, description: "Quantidade de dias para buscar (padrão 7)." }
+                    dias: { type: Type.NUMBER, description: "Quantidade de dias para procurar (padrão 7)." }
                 }
             }
         },
@@ -197,12 +178,11 @@ async function processarComIA(textoUsuario) {
         };
 
         let response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: MODEL_NAME,
             contents: [{ role: 'user', parts: [{ text: textoUsuario }] }],
             config
         });
 
-        // Se o Gemini decidir chamar a planilha ou a agenda:
         if (response.functionCalls && response.functionCalls.length > 0) {
             const call = response.functionCalls[0];
             let resultadoFerramenta = "";
@@ -216,7 +196,7 @@ async function processarComIA(textoUsuario) {
             }
 
             response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
+                model: MODEL_NAME,
                 contents: [
                     { role: 'user', parts: [{ text: textoUsuario }] },
                     response.candidates[0].content,
@@ -232,9 +212,6 @@ async function processarComIA(textoUsuario) {
     }
 }
 
-// ==========================================
-// 4. CONEXÃO COM O WHATSAPP (BAILEYS)
-// ==========================================
 async function iniciarWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
     const sock = makeWASocket({
@@ -269,15 +246,11 @@ async function iniciarWhatsApp() {
         if (!msg.message) return;
 
         const remetente = msg.key.remoteJid;
-        // Ignora mensagens de grupos e status para não responder terceiros por engano
         if (remetente.includes('@g.us') || remetente === 'status@broadcast') return;
 
-        // DICA: Para usar conversando com você mesmo, comece a mensagem com "!" (ex: "!resuma a planilha")
-        // Se outra pessoa mandar (ou se usar um chip exclusivo pro bot), ele responde direto:
         const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
         const doc = msg.message.documentMessage || msg.message.documentWithCaptionMessage?.message?.documentMessage;
 
-        // 1. Se enviou arquivo Excel (.xlsx)
         if (doc && (doc.fileName?.endsWith('.xlsx') || doc.fileName?.endsWith('.xls'))) {
             const buffer = await downloadMediaMessage(msg, 'buffer', {});
             fs.writeFileSync(EXCEL_PATH, buffer);
@@ -292,8 +265,6 @@ async function iniciarWhatsApp() {
             return;
         }
 
-        // 2. Se enviou texto:
-        // Se a mensagem veio de você mesmo (fromMe), só aciona a IA se começar com "!" para não responder suas conversas normais
         if (msg.key.fromMe && !texto.startsWith('!')) return;
 
         const perguntaLimpa = texto.startsWith('!') ? texto.slice(1).trim() : texto.trim();
