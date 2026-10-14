@@ -40,7 +40,7 @@ app.get('/', async (req, res) => {
     res.send(`<div style="font-family: sans-serif; text-align: center; margin-top: 50px;"><h2>Status: ${statusConexao}</h2></div>`);
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`Servidor na porta ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`Servidor rodando na porta ${PORT}`));
 
 function obterAgenda() {
     if (!GOOGLE_CREDENTIALS_JSON) return null;
@@ -100,7 +100,7 @@ async function criarEventoAgenda(titulo, dataHoraInicio, duracaoMinutos = 60, de
 
 function consultarPlanilhaExcel(termoBusca = "") {
     if (!fs.existsSync(EXCEL_PATH)) {
-        return "Nenhuma folha de cálculo foi enviada ainda. Envie um ficheiro .xlsx aqui no chat do WhatsApp.";
+        return "Nenhuma planilha foi enviada ainda. Envie um arquivo .xlsx aqui no chat do WhatsApp.";
     }
     try {
         const workbook = xlsx.readFile(EXCEL_PATH);
@@ -133,11 +133,11 @@ const ferramentas = [{
     functionDeclarations: [
         {
             name: "consultarPlanilhaExcel",
-            description: "Lê e pesquisa dados na folha de cálculo Excel enviada pelo utilizador no WhatsApp.",
+            description: "Lê e pesquisa dados na planilha Excel enviada pelo usuário no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou estado para filtrar (ou vazio para ver resumo geral)." }
+                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou status para filtrar (ou vazio para ver resumo geral)." }
                 }
             }
         },
@@ -147,7 +147,7 @@ const ferramentas = [{
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    dias: { type: Type.NUMBER, description: "Quantidade de dias para procurar (padrão 7)." }
+                    dias: { type: Type.NUMBER, description: "Quantidade de dias para buscar (padrão 7)." }
                 }
             }
         },
@@ -240,38 +240,51 @@ async function iniciarWhatsApp() {
         }
     });
 
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type !== 'notify') return;
-        const msg = messages[0];
-        if (!msg.message) return;
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        for (const msg of messages) {
+            if (!msg.message) continue;
 
-        const remetente = msg.key.remoteJid;
-        if (remetente.includes('@g.us') || remetente === 'status@broadcast') return;
+            const remetente = msg.key.remoteJid;
+            if (!remetente || remetente.includes('@g.us') || remetente === 'status@broadcast') continue;
 
-        const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
-        const doc = msg.message.documentMessage || msg.message.documentWithCaptionMessage?.message?.documentMessage;
+            const texto = msg.message.conversation ||
+                          msg.message.extendedTextMessage?.text ||
+                          msg.message.ephemeralMessage?.message?.extendedTextMessage?.text ||
+                          msg.message.ephemeralMessage?.message?.conversation || "";
 
-        if (doc && (doc.fileName?.endsWith('.xlsx') || doc.fileName?.endsWith('.xls'))) {
-            const buffer = await downloadMediaMessage(msg, 'buffer', {});
-            fs.writeFileSync(EXCEL_PATH, buffer);
-            const wb = xlsx.readFile(EXCEL_PATH);
-            const primeiraAba = wb.Sheets[wb.SheetNames[0]];
-            const linhas = xlsx.utils.sheet_to_json(primeiraAba);
-            const colunas = linhas.length > 0 ? Object.keys(linhas[0]).join(', ') : 'Nenhuma';
+            // Evita loop infinito ignorando as próprias respostas do bot
+            if (texto.startsWith('🤖 *Assistente IA:*') || texto.startsWith('📊 *Planilha')) continue;
 
-            await sock.sendMessage(remetente, {
-                text: `📊 *Planilha "${doc.fileName}" salva com sucesso!*\n• *Abas:* ${wb.SheetNames.join(', ')}\n• *Linhas na 1ª aba:* ${linhas.length}\n• *Colunas:* ${colunas}\n\nPara consultar do seu próprio número, envie mensagens começando com *!* (Ex: *!analise a planilha*).`
-            });
-            return;
+            const doc = msg.message.documentMessage || msg.message.documentWithCaptionMessage?.message?.documentMessage;
+
+            // Define o destino correto (se for conversa consigo mesmo via LID, envia para o próprio número autenticado)
+            const meuNumero = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : remetente;
+            const destino = (msg.key.fromMe && remetente.includes('@lid')) ? meuNumero : remetente;
+
+            if (doc && (doc.fileName?.endsWith('.xlsx') || doc.fileName?.endsWith('.xls'))) {
+                console.log(`Recebendo planilha: ${doc.fileName}`);
+                const buffer = await downloadMediaMessage(msg, 'buffer', {});
+                fs.writeFileSync(EXCEL_PATH, buffer);
+                const wb = xlsx.readFile(EXCEL_PATH);
+                const primeiraAba = wb.Sheets[wb.SheetNames[0]];
+                const linhas = xlsx.utils.sheet_to_json(primeiraAba);
+                const colunas = linhas.length > 0 ? Object.keys(linhas[0]).join(', ') : 'Nenhuma';
+
+                await sock.sendMessage(destino, {
+                    text: `📊 *Planilha "${doc.fileName}" salva com sucesso!*\n• *Abas:* ${wb.SheetNames.join(', ')}\n• *Linhas na 1ª aba:* ${linhas.length}\n• *Colunas:* ${colunas}\n\nPara consultar do seu próprio número, envie mensagens começando com *!* (Ex: *!analise a planilha*).`
+                });
+                continue;
+            }
+
+            if (msg.key.fromMe && !texto.startsWith('!')) continue;
+
+            const perguntaLimpa = texto.startsWith('!') ? texto.slice(1).trim() : texto.trim();
+            if (!perguntaLimpa) continue;
+
+            console.log(`Pergunta recebida: "${perguntaLimpa}" -> Respondendo para: ${destino}`);
+            const resposta = await processarComIA(perguntaLimpa);
+            await sock.sendMessage(destino, { text: `🤖 *Assistente IA:*\n${resposta}` });
         }
-
-        if (msg.key.fromMe && !texto.startsWith('!')) return;
-
-        const perguntaLimpa = texto.startsWith('!') ? texto.slice(1).trim() : texto.trim();
-        if (!perguntaLimpa) return;
-
-        const resposta = await processarComIA(perguntaLimpa);
-        await sock.sendMessage(remetente, { text: `🤖 *Assistente IA:*\n${resposta}` });
     });
 }
 
