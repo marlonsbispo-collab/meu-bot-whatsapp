@@ -8,7 +8,7 @@ const { GoogleGenAI, Type } = require('@google/genai');
 const { google } = require('googleapis');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const CALENDAR_ID = process.env.CALENDAR_ID || 'primary';
@@ -24,7 +24,7 @@ app.get('/', async (req, res) => {
         return res.send(`
             <div style="font-family: sans-serif; text-align: center; margin-top: 50px;">
                 <h1 style="color: #25D366;">✅ WhatsApp Conectado com Sucesso!</h1>
-                <p>O seu Agente IA já está ativo.</p>
+                <p>O seu Agente IA (Gemini 3.8 Flash) já está ativo.</p>
             </div>
         `);
     }
@@ -40,7 +40,7 @@ app.get('/', async (req, res) => {
     res.send(`<div style="font-family: sans-serif; text-align: center; margin-top: 50px;"><h2>Status: ${statusConexao}</h2></div>`);
 });
 
-app.listen(PORT, () => console.log(`Servidor na porta ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`Servidor na porta ${PORT}`));
 
 function obterAgenda() {
     if (!GOOGLE_CREDENTIALS_JSON) return null;
