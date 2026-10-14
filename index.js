@@ -23,8 +23,8 @@ app.get('/', async (req, res) => {
     if (statusConexao === 'Conectado!') {
         return res.send(`
             <div style="font-family: sans-serif; text-align: center; margin-top: 50px;">
-                <h1 style="color: #25D366;">✅ WhatsApp Conectado com Sucesso!</h1>
-                <p>O seu Agente IA Privado já está ativo.</p>
+                <h1 style="color: #25D366;">🔒 MODO PRIVADO ATIVO!</h1>
+                <p>O bot agora ignora 100% de terceiros e só responde na conversa com você mesmo.</p>
             </div>
         `);
     }
@@ -40,7 +40,7 @@ app.get('/', async (req, res) => {
     res.send(`<div style="font-family: sans-serif; text-align: center; margin-top: 50px;"><h2>Status: ${statusConexao}</h2></div>`);
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`Servidor na porta ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`MODO PRIVADO ATIVO na porta ${PORT}`));
 
 function obterAgenda() {
     if (!GOOGLE_CREDENTIALS_JSON) return null;
@@ -100,7 +100,7 @@ async function criarEventoAgenda(titulo, dataHoraInicio, duracaoMinutos = 60, de
 
 function consultarPlanilhaExcel(termoBusca = "") {
     if (!fs.existsSync(EXCEL_PATH)) {
-        return "Nenhuma folha de cálculo foi enviada ainda. Envie um ficheiro .xlsx aqui no chat do WhatsApp.";
+        return "Nenhuma planilha foi enviada ainda. Envie um arquivo .xlsx aqui no chat do WhatsApp.";
     }
     try {
         const workbook = xlsx.readFile(EXCEL_PATH);
@@ -133,11 +133,11 @@ const ferramentas = [{
     functionDeclarations: [
         {
             name: "consultarPlanilhaExcel",
-            description: "Lê e pesquisa dados na folha de cálculo Excel enviada pelo utilizador no WhatsApp.",
+            description: "Lê e pesquisa dados na planilha Excel enviada pelo usuário no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou estado para filtrar (ou vazio para ver resumo geral)." }
+                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou status para filtrar (ou vazio para ver resumo geral)." }
                 }
             }
         },
@@ -147,7 +147,7 @@ const ferramentas = [{
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    dias: { type: Type.NUMBER, description: "Quantidade de dias para procurar (padrão 7)." }
+                    dias: { type: Type.NUMBER, description: "Quantidade de dias para buscar (padrão 7)." }
                 }
             }
         },
@@ -168,7 +168,6 @@ const ferramentas = [{
     ]
 }];
 
-// Função auxiliar que repete automaticamente se o servidor da Google der erro 503 (alta procura)
 async function chamarGeminiComRetry(parametros, tentativas = 3) {
     for (let i = 0; i < tentativas; i++) {
         try {
@@ -246,7 +245,7 @@ async function iniciarWhatsApp() {
         if (connection === 'open') {
             qrCodeAtual = null;
             statusConexao = 'Conectado!';
-            console.log('WhatsApp conectado!');
+            console.log('WhatsApp conectado em MODO PRIVADO!');
         }
         if (connection === 'close') {
             const deveReconectar = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -259,11 +258,21 @@ async function iniciarWhatsApp() {
         for (const msg of messages) {
             if (!msg.message) continue;
 
-            // REGRA DE OURO: Ignora 100% das mensagens enviadas por terceiros! Só aceita mensagens enviadas por si mesmo.
+            // TRAVA 1: Ignora imediatamente se a mensagem NÃO foi enviada pelo seu próprio aparelho
             if (!msg.key.fromMe) continue;
 
-            const remetente = msg.key.remoteJid;
-            if (!remetente || remetente.includes('@g.us') || remetente === 'status@broadcast') continue;
+            const remetente = msg.key.remoteJid || "";
+            if (remetente.includes('@g.us') || remetente === 'status@broadcast') continue;
+
+            // TRAVA 2: Verifica se o chat aberto é a conversa com VOCÊ MESMO (e não uma conversa com outra pessoa)
+            const meuNumeroLimpo = sock.user?.id ? sock.user.id.split(':')[0].split('@')[0] : "";
+            const meuLidLimpo = sock.user?.lid ? sock.user.lid.split(':')[0].split('@')[0] : "";
+            const ehConversaComigoMesmo =
+                (meuNumeroLimpo && remetente.startsWith(meuNumeroLimpo)) ||
+                (meuLidLimpo && remetente.startsWith(meuLidLimpo)) ||
+                remetente.endsWith('@lid');
+
+            if (!ehConversaComigoMesmo) continue;
 
             const texto = msg.message.conversation ||
                           msg.message.extendedTextMessage?.text ||
@@ -273,8 +282,7 @@ async function iniciarWhatsApp() {
             if (texto.startsWith('🤖 *Assistente IA:*') || texto.startsWith('📊 *Planilha')) continue;
 
             const doc = msg.message.documentMessage || msg.message.documentWithCaptionMessage?.message?.documentMessage;
-            const meuNumero = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : remetente;
-            const destino = remetente.includes('@lid') ? meuNumero : remetente;
+            const destino = meuNumeroLimpo ? `${meuNumeroLimpo}@s.whatsapp.net` : remetente;
 
             if (doc && (doc.fileName?.endsWith('.xlsx') || doc.fileName?.endsWith('.xls'))) {
                 const buffer = await downloadMediaMessage(msg, 'buffer', {});
@@ -290,7 +298,7 @@ async function iniciarWhatsApp() {
                 continue;
             }
 
-            // Só aciona a IA se você começar a frase com "!"
+            // TRAVA 3: Só responde se o texto começar com "!"
             if (!texto.startsWith('!')) continue;
 
             const perguntaLimpa = texto.slice(1).trim();
