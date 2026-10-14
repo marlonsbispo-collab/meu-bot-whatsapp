@@ -24,7 +24,7 @@ app.get('/', async (req, res) => {
         return res.send(`
             <div style="font-family: sans-serif; text-align: center; margin-top: 50px;">
                 <h1 style="color: #25D366;">✅ WhatsApp Conectado com Sucesso!</h1>
-                <p>O seu Agente IA (Gemini 3.8 Flash) já está ativo.</p>
+                <p>O seu Agente IA Privado já está ativo.</p>
             </div>
         `);
     }
@@ -40,7 +40,7 @@ app.get('/', async (req, res) => {
     res.send(`<div style="font-family: sans-serif; text-align: center; margin-top: 50px;"><h2>Status: ${statusConexao}</h2></div>`);
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`Servidor rodando na porta ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`Servidor na porta ${PORT}`));
 
 function obterAgenda() {
     if (!GOOGLE_CREDENTIALS_JSON) return null;
@@ -100,7 +100,7 @@ async function criarEventoAgenda(titulo, dataHoraInicio, duracaoMinutos = 60, de
 
 function consultarPlanilhaExcel(termoBusca = "") {
     if (!fs.existsSync(EXCEL_PATH)) {
-        return "Nenhuma planilha foi enviada ainda. Envie um arquivo .xlsx aqui no chat do WhatsApp.";
+        return "Nenhuma folha de cálculo foi enviada ainda. Envie um ficheiro .xlsx aqui no chat do WhatsApp.";
     }
     try {
         const workbook = xlsx.readFile(EXCEL_PATH);
@@ -133,11 +133,11 @@ const ferramentas = [{
     functionDeclarations: [
         {
             name: "consultarPlanilhaExcel",
-            description: "Lê e pesquisa dados na planilha Excel enviada pelo usuário no WhatsApp.",
+            description: "Lê e pesquisa dados na folha de cálculo Excel enviada pelo utilizador no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou status para filtrar (ou vazio para ver resumo geral)." }
+                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou estado para filtrar (ou vazio para ver resumo geral)." }
                 }
             }
         },
@@ -147,7 +147,7 @@ const ferramentas = [{
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    dias: { type: Type.NUMBER, description: "Quantidade de dias para buscar (padrão 7)." }
+                    dias: { type: Type.NUMBER, description: "Quantidade de dias para procurar (padrão 7)." }
                 }
             }
         },
@@ -168,6 +168,21 @@ const ferramentas = [{
     ]
 }];
 
+// Função auxiliar que repete automaticamente se o servidor da Google der erro 503 (alta procura)
+async function chamarGeminiComRetry(parametros, tentativas = 3) {
+    for (let i = 0; i < tentativas; i++) {
+        try {
+            return await ai.models.generateContent(parametros);
+        } catch (err) {
+            if ((err.message?.includes('503') || err.message?.includes('UNAVAILABLE')) && i < tentativas - 1) {
+                await new Promise(r => setTimeout(r, 2500));
+                continue;
+            }
+            throw err;
+        }
+    }
+}
+
 async function processarComIA(textoUsuario) {
     try {
         const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
@@ -177,7 +192,7 @@ async function processarComIA(textoUsuario) {
             temperature: 0.4
         };
 
-        let response = await ai.models.generateContent({
+        let response = await chamarGeminiComRetry({
             model: MODEL_NAME,
             contents: [{ role: 'user', parts: [{ text: textoUsuario }] }],
             config
@@ -195,7 +210,7 @@ async function processarComIA(textoUsuario) {
                 resultadoFerramenta = await criarEventoAgenda(call.args.titulo, call.args.dataHoraInicio, call.args.duracaoMinutos, call.args.descricao);
             }
 
-            response = await ai.models.generateContent({
+            response = await chamarGeminiComRetry({
                 model: MODEL_NAME,
                 contents: [
                     { role: 'user', parts: [{ text: textoUsuario }] },
@@ -208,7 +223,7 @@ async function processarComIA(textoUsuario) {
 
         return response.text || "Processado com sucesso.";
     } catch (err) {
-        return `⚠️ Erro na IA: ${err.message}`;
+        return `⚠️ A IA está com alta procura neste segundo. Tente novamente em instantes.`;
     }
 }
 
@@ -244,6 +259,9 @@ async function iniciarWhatsApp() {
         for (const msg of messages) {
             if (!msg.message) continue;
 
+            // REGRA DE OURO: Ignora 100% das mensagens enviadas por terceiros! Só aceita mensagens enviadas por si mesmo.
+            if (!msg.key.fromMe) continue;
+
             const remetente = msg.key.remoteJid;
             if (!remetente || remetente.includes('@g.us') || remetente === 'status@broadcast') continue;
 
@@ -252,17 +270,13 @@ async function iniciarWhatsApp() {
                           msg.message.ephemeralMessage?.message?.extendedTextMessage?.text ||
                           msg.message.ephemeralMessage?.message?.conversation || "";
 
-            // Evita loop infinito ignorando as próprias respostas do bot
             if (texto.startsWith('🤖 *Assistente IA:*') || texto.startsWith('📊 *Planilha')) continue;
 
             const doc = msg.message.documentMessage || msg.message.documentWithCaptionMessage?.message?.documentMessage;
-
-            // Define o destino correto (se for conversa consigo mesmo via LID, envia para o próprio número autenticado)
             const meuNumero = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : remetente;
-            const destino = (msg.key.fromMe && remetente.includes('@lid')) ? meuNumero : remetente;
+            const destino = remetente.includes('@lid') ? meuNumero : remetente;
 
             if (doc && (doc.fileName?.endsWith('.xlsx') || doc.fileName?.endsWith('.xls'))) {
-                console.log(`Recebendo planilha: ${doc.fileName}`);
                 const buffer = await downloadMediaMessage(msg, 'buffer', {});
                 fs.writeFileSync(EXCEL_PATH, buffer);
                 const wb = xlsx.readFile(EXCEL_PATH);
@@ -271,17 +285,17 @@ async function iniciarWhatsApp() {
                 const colunas = linhas.length > 0 ? Object.keys(linhas[0]).join(', ') : 'Nenhuma';
 
                 await sock.sendMessage(destino, {
-                    text: `📊 *Planilha "${doc.fileName}" salva com sucesso!*\n• *Abas:* ${wb.SheetNames.join(', ')}\n• *Linhas na 1ª aba:* ${linhas.length}\n• *Colunas:* ${colunas}\n\nPara consultar do seu próprio número, envie mensagens começando com *!* (Ex: *!analise a planilha*).`
+                    text: `📊 *Planilha "${doc.fileName}" salva com sucesso!*\n• *Abas:* ${wb.SheetNames.join(', ')}\n• *Linhas na 1ª aba:* ${linhas.length}\n• *Colunas:* ${colunas}\n\nPara consultar, envie mensagens começando com *!* (Ex: *!analise a planilha*).`
                 });
                 continue;
             }
 
-            if (msg.key.fromMe && !texto.startsWith('!')) continue;
+            // Só aciona a IA se você começar a frase com "!"
+            if (!texto.startsWith('!')) continue;
 
-            const perguntaLimpa = texto.startsWith('!') ? texto.slice(1).trim() : texto.trim();
+            const perguntaLimpa = texto.slice(1).trim();
             if (!perguntaLimpa) continue;
 
-            console.log(`Pergunta recebida: "${perguntaLimpa}" -> Respondendo para: ${destino}`);
             const resposta = await processarComIA(perguntaLimpa);
             await sock.sendMessage(destino, { text: `🤖 *Assistente IA:*\n${resposta}` });
         }
