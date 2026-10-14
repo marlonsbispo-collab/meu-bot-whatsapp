@@ -23,8 +23,8 @@ app.get('/', async (req, res) => {
     if (statusConexao === 'Conectado!') {
         return res.send(`
             <div style="font-family: sans-serif; text-align: center; margin-top: 50px;">
-                <h1 style="color: #25D366;">🔒 MODO PRIVADO ATIVO!</h1>
-                <p>O bot agora ignora 100% de terceiros e só responde na conversa com você mesmo.</p>
+                <h1 style="color: #25D366;">🌐 MODO PRIVADO + INTERNET ATIVOS!</h1>
+                <p>O seu Agente IA tem acesso à Busca do Google, Planilha Excel e Agenda.</p>
             </div>
         `);
     }
@@ -40,7 +40,7 @@ app.get('/', async (req, res) => {
     res.send(`<div style="font-family: sans-serif; text-align: center; margin-top: 50px;"><h2>Status: ${statusConexao}</h2></div>`);
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`MODO PRIVADO ATIVO na porta ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`MODO PRIVADO + INTERNET ATIVO na porta ${PORT}`));
 
 function obterAgenda() {
     if (!GOOGLE_CREDENTIALS_JSON) return null;
@@ -129,8 +129,50 @@ function consultarPlanilhaExcel(termoBusca = "") {
     }
 }
 
+async function chamarGeminiComRetry(parametros, tentativas = 3) {
+    for (let i = 0; i < tentativas; i++) {
+        try {
+            return await ai.models.generateContent(parametros);
+        } catch (err) {
+            if ((err.message?.includes('503') || err.message?.includes('UNAVAILABLE')) && i < tentativas - 1) {
+                await new Promise(r => setTimeout(r, 2500));
+                continue;
+            }
+            throw err;
+        }
+    }
+}
+
+// NOVA FUNÇÃO: Pesquisa na Internet em Tempo Real usando o Google Search oficial da API
+async function pesquisarNaInternet(consulta) {
+    try {
+        const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+        const res = await chamarGeminiComRetry({
+            model: MODEL_NAME,
+            contents: `Data/hora atual: ${agora}. Pesquise na web em tempo real e responda com dados precisos e atualizados: ${consulta}`,
+            config: {
+                tools: [{ googleSearch: {} }]
+            }
+        });
+        return res.text || "Não encontrei resultados atualizados para esta busca.";
+    } catch (err) {
+        return `Erro ao pesquisar na internet: ${err.message}`;
+    }
+}
+
 const ferramentas = [{
     functionDeclarations: [
+        {
+            name: "pesquisarNaInternet",
+            description: "Pesquisa no Google em tempo real sobre clima, previsão do tempo, notícias, cotações, resultados, endereços ou qualquer informação atualizada da internet.",
+            parameters: {
+                type: Type.OBJECT,
+                properties: {
+                    consulta: { type: Type.STRING, description: "O que pesquisar no Google (ex: 'clima agora em São Paulo', 'notícias de hoje')" }
+                },
+                required: ["consulta"]
+            }
+        },
         {
             name: "consultarPlanilhaExcel",
             description: "Lê e pesquisa dados na planilha Excel enviada pelo usuário no WhatsApp.",
@@ -168,25 +210,13 @@ const ferramentas = [{
     ]
 }];
 
-async function chamarGeminiComRetry(parametros, tentativas = 3) {
-    for (let i = 0; i < tentativas; i++) {
-        try {
-            return await ai.models.generateContent(parametros);
-        } catch (err) {
-            if ((err.message?.includes('503') || err.message?.includes('UNAVAILABLE')) && i < tentativas - 1) {
-                await new Promise(r => setTimeout(r, 2500));
-                continue;
-            }
-            throw err;
-        }
-    }
-}
-
 async function processarComIA(textoUsuario) {
     try {
         const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
         const config = {
-            systemInstruction: `Você é um assistente pessoal inteligente no WhatsApp. Data/hora atual: ${agora}. Você pode ler a planilha Excel enviada, consultar/agendar no Google Calendar e dar sugestões práticas sobre qualquer pergunta. Responda de forma objetiva e formatada para WhatsApp.`,
+            systemInstruction: `Você é um assistente pessoal inteligente no WhatsApp com acesso à internet em tempo real. Data/hora atual: ${agora}. 
+Sempre que o usuário perguntar sobre clima, tempo, notícias, preços, fatos atuais ou qualquer informação da web, use OBRIGATORIAMENTE a ferramenta "pesquisarNaInternet". 
+Você também pode ler a planilha Excel enviada ("consultarPlanilhaExcel") e consultar/agendar no Google Calendar. Responda de forma clara, objetiva e formatada para WhatsApp.`,
             tools: ferramentas,
             temperature: 0.4
         };
@@ -201,7 +231,9 @@ async function processarComIA(textoUsuario) {
             const call = response.functionCalls[0];
             let resultadoFerramenta = "";
 
-            if (call.name === "consultarPlanilhaExcel") {
+            if (call.name === "pesquisarNaInternet") {
+                resultadoFerramenta = await pesquisarNaInternet(call.args.consulta || textoUsuario);
+            } else if (call.name === "consultarPlanilhaExcel") {
                 resultadoFerramenta = consultarPlanilhaExcel(call.args.termoBusca || "");
             } else if (call.name === "listarEventosAgenda") {
                 resultadoFerramenta = await listarEventosAgenda(call.args.dias || 7);
@@ -245,7 +277,7 @@ async function iniciarWhatsApp() {
         if (connection === 'open') {
             qrCodeAtual = null;
             statusConexao = 'Conectado!';
-            console.log('WhatsApp conectado em MODO PRIVADO!');
+            console.log('WhatsApp conectado em MODO PRIVADO + INTERNET!');
         }
         if (connection === 'close') {
             const deveReconectar = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -258,13 +290,11 @@ async function iniciarWhatsApp() {
         for (const msg of messages) {
             if (!msg.message) continue;
 
-            // TRAVA 1: Ignora imediatamente se a mensagem NÃO foi enviada pelo seu próprio aparelho
             if (!msg.key.fromMe) continue;
 
             const remetente = msg.key.remoteJid || "";
             if (remetente.includes('@g.us') || remetente === 'status@broadcast') continue;
 
-            // TRAVA 2: Verifica se o chat aberto é a conversa com VOCÊ MESMO (e não uma conversa com outra pessoa)
             const meuNumeroLimpo = sock.user?.id ? sock.user.id.split(':')[0].split('@')[0] : "";
             const meuLidLimpo = sock.user?.lid ? sock.user.lid.split(':')[0].split('@')[0] : "";
             const ehConversaComigoMesmo =
@@ -298,7 +328,6 @@ async function iniciarWhatsApp() {
                 continue;
             }
 
-            // TRAVA 3: Só responde se o texto começar com "!"
             if (!texto.startsWith('!')) continue;
 
             const perguntaLimpa = texto.slice(1).trim();
