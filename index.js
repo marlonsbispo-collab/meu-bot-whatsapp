@@ -12,36 +12,27 @@ const PORT = process.env.PORT || 10000;
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const CALENDAR_ID = process.env.CALENDAR_ID || 'primary';
 const GOOGLE_CREDENTIALS_JSON = process.env.GOOGLE_CREDENTIALS_JSON;
-const MEU_NUMERO = process.env.MEU_NUMERO || ''; // Opcional: 5511999999999
+const MEU_NUMERO = process.env.MEU_NUMERO || '';
 const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || '';
 
 const EXCEL_PATH = './base_dados.xlsx';
 const PDF_PATH = './documento_atual.pdf';
 const IMAGE_PATH = './imagem_atual.jpg';
-
-const LISTA_MODELOS = [
-    'gemini-3.8-flash',
-    'gemini-3.8-flash-lite-preview',
-    'gemini-3.8-pro-preview',
-    'gemini-2.0-flash',
-    'gemini-2.0-flash-lite'
-];
+const MODEL_NAME = 'gemini-3.8-flash';
 
 let statusConexao = 'Iniciando...';
 let codigoPareamento = null;
 let sockGlobal = null;
 
-// Rota rápida para manter o servidor do Render acordado 24/7
 app.get('/ping', (req, res) => res.status(200).send('OK'));
 
-// Rota para gerar o código de 8 dígitos direto pelo navegador
 app.get('/gerar-codigo', async (req, res) => {
     const num = (req.query.numero || MEU_NUMERO).replace(/\D/g, '');
     if (!num || num.length < 10) {
         return res.send('<h3>⚠️ Digite o número completo com DDI 55 e DDD (Ex: 5511999999999). <a href="/">Voltar</a></h3>');
     }
     try {
-        if (!sockGlobal) return res.send('<h3>O WhatsApp ainda está iniciando. Aguarde 5 segundos e tente novamente. <a href="/">Voltar</a></h3>');
+        if (!sockGlobal) return res.send('<h3>O WhatsApp ainda está a iniciar. Aguarde 5 segundos e tente novamente. <a href="/">Voltar</a></h3>');
         codigoPareamento = await sockGlobal.requestPairingCode(num);
         res.redirect('/');
     } catch (err) {
@@ -49,13 +40,12 @@ app.get('/gerar-codigo', async (req, res) => {
     }
 });
 
-// Painel Principal (Sem QR Code, usando Código de 8 Dígitos)
 app.get('/', (req, res) => {
     if (statusConexao === 'Conectado!') {
         return res.send(`
             <div style="font-family: sans-serif; text-align: center; margin-top: 50px;">
                 <h1 style="color: #25D366;">🔒 WHATSAPP CONECTADO E ESTÁVEL!</h1>
-                <p>Modo Privado Ativo (Voz + Imagem + PDF + Excel + Agenda + Web).</p>
+                <p>Modelo ativo: <strong>${MODEL_NAME}</strong> (Voz + Imagem + PDF + Excel + Agenda + Web).</p>
             </div>
         `);
     }
@@ -70,14 +60,9 @@ app.get('/', (req, res) => {
                     <p style="margin: 0 0 10px 0; font-size: 14px; color: #333;">Digite este código no seu WhatsApp:</p>
                     <h1 style="letter-spacing: 6px; color: #1b5e20; margin: 0; font-size: 36px;">${codigoPareamento}</h1>
                 </div>
-                <p style="font-size: 13px; color: #555; text-align: left; line-height: 1.5;">
-                    1. No WhatsApp do celular, vá em <b>Aparelhos Conectados > Conectar um aparelho</b>.<br>
-                    2. Na parte inferior da tela da câmera, toque em <b>"Conectar com número de telefone"</b>.<br>
-                    3. Digite os 8 dígitos acima!
-                </p>
             ` : `
                 <form action="/gerar-codigo" method="GET" style="margin-top: 20px;">
-                    <p style="font-size: 14px; color: #555;">Digite seu número com <b>55 + DDD + Número</b> (apenas números):</p>
+                    <p style="font-size: 14px; color: #555;">Digite o seu número com <b>55 + DDD + Número</b>:</p>
                     <input type="text" name="numero" placeholder="Ex: 5511999999999" value="${MEU_NUMERO}" required style="padding: 12px; width: 80%; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; margin-bottom: 12px; text-align: center;" />
                     <br>
                     <button type="submit" style="padding: 12px 24px; font-size: 16px; background: #25D366; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Gerar Código de 8 Dígitos</button>
@@ -88,8 +73,7 @@ app.get('/', (req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`MODO PARING CODE + ANTI-QUEDA ATIVO na porta ${PORT}`);
-    // Auto-Ping interno a cada 10 minutos para evitar hibernação
+    console.log(`SERVIDOR ESTÁVEL ATIVO na porta ${PORT}`);
     if (RENDER_EXTERNAL_URL) {
         setInterval(() => {
             fetch(`${RENDER_EXTERNAL_URL}/ping`).catch(() => {});
@@ -97,39 +81,44 @@ app.listen(PORT, '0.0.0.0', () => {
     }
 });
 
+// FUNÇÃO DE CHAMADA AO GEMINI 3.8 FLASH COM ESPERA INTELIGENTE EM HORÁRIO DE PICO
 async function chamarGeminiComRetry(parametros) {
     let ultimoErro = null;
+    const temposEspera = [3000, 6000, 10000, 15000]; // Espera 3s, 6s, 10s e 15s se a Google estiver ocupada
 
-    for (let tentativa = 1; tentativa <= 3; tentativa++) {
+    for (let i = 0; i <= temposEspera.length; i++) {
         try {
             return await ai.models.generateContent({
                 ...parametros,
-                model: 'gemini-3.8-flash'
+                model: MODEL_NAME
             });
         } catch (err) {
             ultimoErro = err;
             const msg = err.message || "";
-            if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand') || msg.includes('429')) {
-                await new Promise(r => setTimeout(r, tentativa * 2500));
+            if ((msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand') || msg.includes('429')) && i < temposEspera.length) {
+                console.log(`Pico na Google (503). A aguardar ${temposEspera[i] / 1000}s para tentar novamente...`);
+                await new Promise(r => setTimeout(r, temposEspera[i]));
                 continue;
             }
-            break;
+            throw err;
         }
     }
-
-    for (const modeloReserva of LISTA_MODELOS.slice(1)) {
-        try {
-            return await ai.models.generateContent({
-                ...parametros,
-                model: modeloReserva
-            });
-        } catch (err) {
-            ultimoErro = err;
-            await new Promise(r => setTimeout(r, 1500));
-        }
-    }
-
     throw ultimoErro;
+}
+
+// Função para listar quais modelos existem oficialmente na sua chave da Google
+async function listarModelosDisponiveisNaChave() {
+    try {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${process.env.GEMINI_API_KEY}`);
+        const data = await res.json();
+        if (!data.models) return `Resposta da API: ${JSON.stringify(data)}`;
+        const nomes = data.models
+            .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
+            .map(m => `• ${m.name.replace('models/', '')}`);
+        return `🤖 *Modelos ativos na sua chave Google:*\n${nomes.join('\n')}`;
+    } catch (err) {
+        return `Erro ao listar modelos: ${err.message}`;
+    }
 }
 
 function obterAgenda() {
@@ -194,7 +183,7 @@ async function criarEventoAgenda(titulo, dataHoraInicio, duracaoMinutos = 60, de
 
 function consultarPlanilhaExcel(termoBusca = "") {
     if (!fs.existsSync(EXCEL_PATH)) {
-        return "Nenhuma planilha foi enviada ainda. Envie um arquivo .xlsx aqui no chat do WhatsApp.";
+        return "Nenhuma folha de cálculo foi enviada ainda. Envie um ficheiro .xlsx aqui no chat do WhatsApp.";
     }
     try {
         const workbook = xlsx.readFile(EXCEL_PATH);
@@ -225,7 +214,7 @@ function consultarPlanilhaExcel(termoBusca = "") {
 
 async function consultarDocumentoPDF(pergunta = "Faça um resumo executivo completo deste documento PDF.") {
     if (!fs.existsSync(PDF_PATH)) {
-        return "Nenhum arquivo PDF foi enviado ainda. Envie um documento .pdf aqui no chat do WhatsApp.";
+        return "Nenhum ficheiro PDF foi enviado ainda. Envie um documento .pdf aqui no chat do WhatsApp.";
     }
     try {
         const base64Pdf = fs.readFileSync(PDF_PATH).toString('base64');
@@ -312,17 +301,17 @@ const ferramentas = [{
         },
         {
             name: "consultarPlanilhaExcel",
-            description: "Lê e pesquisa dados na planilha Excel enviada pelo usuário no WhatsApp.",
+            description: "Lê e pesquisa dados na folha de cálculo Excel enviada pelo utilizador no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou status para filtrar (ou vazio para ver resumo geral)." }
+                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou estado para filtrar (ou vazio para ver resumo geral)." }
                 }
             }
         },
         {
             name: "consultarDocumentoPDF",
-            description: "Lê, resume ou responde perguntas sobre o último arquivo PDF enviado pelo usuário no WhatsApp.",
+            description: "Lê, resume ou responde a perguntas sobre o último ficheiro PDF enviado pelo utilizador no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
@@ -333,7 +322,7 @@ const ferramentas = [{
         },
         {
             name: "consultarImagem",
-            description: "Lê, extrai textos/valores ou responde perguntas sobre a última foto, nota fiscal, print ou imagem enviada pelo usuário no WhatsApp.",
+            description: "Lê, extrai textos/valores ou responde a perguntas sobre a última foto, fatura, print ou imagem enviada pelo utilizador no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
@@ -348,7 +337,7 @@ const ferramentas = [{
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    dias: { type: Type.NUMBER, description: "Quantidade de dias para buscar (padrão 7)." }
+                    dias: { type: Type.NUMBER, description: "Quantidade de dias para procurar (padrão 7)." }
                 }
             }
         },
@@ -381,11 +370,11 @@ SUAS CAPACIDADES PRINCIPAIS:
    - Se for apenas um áudio encaminhado ou informativo, entregue a transcrição completa e um resumo em tópicos.
 
 2. REESCRITA DE TEXTOS E E-MAILS:
-   - Sempre que o usuário pedir para reescrever, melhorar ou redigir um texto, comunicado ou e-mail num tom específico (ex: executivo, formal, persuasivo, diplomático, direto), adapte o texto perfeitamente ao tom solicitado, pronto para copiar e colar.
+   - Sempre que o utilizador pedir para reescrever, melhorar ou redigir um texto, comunicado ou e-mail num tom específico (ex: executivo, formal, persuasivo, diplomático, direto), adapte o texto perfeitamente ao tom solicitado, pronto para copiar e colar.
 
 3. FERRAMENTAS (WEB, EXCEL, PDF, IMAGEM E AGENDA):
-   - Para clima, jogos, notícias ou fatos atuais: use "pesquisarNaInternet".
-   - Para dados da planilha Excel enviada: use "consultarPlanilhaExcel".
+   - Para clima, jogos, notícias ou factos atuais: use "pesquisarNaInternet".
+   - Para dados da folha de cálculo Excel enviada: use "consultarPlanilhaExcel".
    - Para perguntas sobre o documento PDF enviado: use "consultarDocumentoPDF".
    - Para perguntas sobre a última foto/print/imagem enviada: use "consultarImagem".
    - Para compromissos na agenda: use "listarEventosAgenda" ou "criarEventoAgenda".
@@ -424,7 +413,7 @@ async function processarComIA(partesConteudo, textoReferencia = "") {
                 resultadoFerramenta = await criarEventoAgenda(call.args.titulo, call.args.dataHoraInicio, call.args.duracaoMinutos, call.args.descricao);
             }
 
-            await new Promise(r => setTimeout(r, 1500));
+            await new Promise(r => setTimeout(r, 2000));
 
             response = await chamarGeminiComRetry({
                 contents: [
@@ -438,7 +427,7 @@ async function processarComIA(partesConteudo, textoReferencia = "") {
 
         return response.text || "Processado com sucesso.";
     } catch (err) {
-        return `⚠️ Detalhe técnico da API: ${err.message?.substring(0, 120)}`;
+        return `⚠️ Os servidores gratuitos da Google estão com fila neste momento. Aguarde 15 segundos e tente novamente.`;
     }
 }
 
@@ -451,9 +440,9 @@ async function iniciarWhatsApp() {
         auth: state,
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
-        browser: ['Ubuntu', 'Chrome', '20.0.04'], // Obrigatório para o Pairing Code funcionar com estabilidade
-        keepAliveIntervalMs: 30000,               // Mantém o túnel do WhatsApp vivo a cada 30s
-        syncFullHistory: false,                   // Economiza memória RAM do Render gratuito
+        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        keepAliveIntervalMs: 30000,
+        syncFullHistory: false,
         markOnlineOnConnect: false
     });
 
@@ -465,17 +454,11 @@ async function iniciarWhatsApp() {
 
         if (qr && !sock.authState.creds.registered) {
             statusConexao = 'Pronto para gerar código de 8 dígitos';
-            // Se você definiu MEU_NUMERO no Environment do Render, ele já gera o código sozinho!
             if (MEU_NUMERO && !codigoPareamento) {
                 try {
                     const numLimpo = MEU_NUMERO.replace(/\D/g, '');
                     codigoPareamento = await sock.requestPairingCode(numLimpo);
-                    console.log(`========================================`);
-                    console.log(`SEU CÓDIGO DE PAREAMENTO: ${codigoPareamento}`);
-                    console.log(`========================================`);
-                } catch (e) {
-                    console.error("Erro ao gerar código automático:", e.message);
-                }
+                } catch (e) {}
             }
         }
 
@@ -492,7 +475,7 @@ async function iniciarWhatsApp() {
             if (deveReconectar) {
                 setTimeout(() => iniciarWhatsApp(), 4000);
             } else {
-                statusConexao = 'Desconectado (Sessão encerrada no celular).';
+                statusConexao = 'Desconectado (Sessão encerrada no telemóvel).';
             }
         }
     });
@@ -520,7 +503,7 @@ async function iniciarWhatsApp() {
             const texto = conteudoMsg.conversation ||
                           conteudoMsg.extendedTextMessage?.text || "";
 
-            if (texto.startsWith('🤖 *Assistente IA') || texto.startsWith('📊 *Planilha') || texto.startsWith('📄 *PDF') || texto.startsWith('📅 *Compromissos')) continue;
+            if (texto.startsWith('🤖 *Assistente IA') || texto.startsWith('🤖 *Modelos ativos') || texto.startsWith('📊 *Planilha') || texto.startsWith('📄 *PDF') || texto.startsWith('📅 *Compromissos')) continue;
 
             const doc = conteudoMsg.documentMessage || conteudoMsg.documentWithCaptionMessage?.message?.documentMessage;
 
@@ -534,7 +517,7 @@ async function iniciarWhatsApp() {
                 const colunas = linhas.length > 0 ? Object.keys(linhas[0]).join(', ') : 'Nenhuma';
 
                 await sock.sendMessage(destino, {
-                    text: `📊 *Planilha "${doc.fileName}" salva com sucesso!*\n• *Abas:* ${wb.SheetNames.join(', ')}\n• *Linhas na 1ª aba:* ${linhas.length}\n• *Colunas:* ${colunas}\n\nVocê pode consultá-la por texto com *!* ou enviando um *áudio*!`
+                    text: `📊 *Planilha "${doc.fileName}" salva com sucesso!*\n• *Abas:* ${wb.SheetNames.join(', ')}\n• *Linhas na 1ª aba:* ${linhas.length}\n• *Colunas:* ${colunas}\n\nPode consultá-la por texto com *!* ou enviando um *áudio*!`
                 });
                 continue;
             }
@@ -548,7 +531,7 @@ async function iniciarWhatsApp() {
                     const legendaPdf = doc.caption?.trim() || "Faça um resumo executivo completo deste documento PDF, destacando os pontos principais, datas, valores ou conclusões importantes.";
 
                     await sock.sendMessage(destino, {
-                        text: `📄 *PDF "${doc.fileName || 'documento.pdf'}" recebido!*\n_Analisando o conteúdo e gerando o resumo..._`
+                        text: `📄 *PDF "${doc.fileName || 'documento.pdf'}" recebido!*\n_A analisar o conteúdo e a gerar o resumo..._`
                     });
 
                     const analisePdf = await consultarDocumentoPDF(legendaPdf);
@@ -575,7 +558,7 @@ async function iniciarWhatsApp() {
 
                     const respostaImg = await consultarImagem(instrucaoImg);
                     await sock.sendMessage(destino, {
-                        text: `🤖 *Assistente IA (Análise de Imagem):*\n${respostaImg}\n\n💡 _A foto ficou salva! Você pode fazer mais perguntas sobre ela usando *!* ou enviando um áudio._`
+                        text: `🤖 *Assistente IA (Análise de Imagem):*\n${respostaImg}\n\n💡 _A foto ficou salva! Pode fazer mais perguntas sobre ela usando *!* ou enviando um áudio._`
                     });
                 } catch (err) {
                     await sock.sendMessage(destino, { text: `⚠️ Erro ao processar a imagem: ${err.message}` });
@@ -610,6 +593,14 @@ async function iniciarWhatsApp() {
             const perguntaLimpa = texto.slice(1).trim();
             if (!perguntaLimpa) continue;
 
+            // Atalho 1: Ver quais modelos existem na sua chave da Google (sem gastar IA)
+            if (perguntaLimpa.toLowerCase() === 'modelos') {
+                const lista = await listarModelosDisponiveisNaChave();
+                await sock.sendMessage(destino, { text: lista });
+                continue;
+            }
+
+            // Atalho 2: Testar a agenda direto
             if (perguntaLimpa.toLowerCase() === 'agenda' || perguntaLimpa.toLowerCase() === 'conectar na minha agenda') {
                 const statusAgenda = await listarEventosAgenda(7);
                 await sock.sendMessage(destino, { text: `🤖 *Assistente IA:*\n${statusAgenda}` });
