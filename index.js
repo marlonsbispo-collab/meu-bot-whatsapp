@@ -1,6 +1,5 @@
-const { default: makeWASocket, useMultiFileAuthState, downloadMediaMessage, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, downloadMediaMessage, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const express = require('express');
-const QRCode = require('qrcode');
 const pino = require('pino');
 const fs = require('fs');
 const xlsx = require('xlsx');
@@ -13,12 +12,14 @@ const PORT = process.env.PORT || 10000;
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const CALENDAR_ID = process.env.CALENDAR_ID || 'primary';
 const GOOGLE_CREDENTIALS_JSON = process.env.GOOGLE_CREDENTIALS_JSON;
+const MEU_NUMERO = process.env.MEU_NUMERO || ''; // Opcional: 5511999999999
+const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || '';
+
 const EXCEL_PATH = './base_dados.xlsx';
 const PDF_PATH = './documento_atual.pdf';
 const IMAGE_PATH = './imagem_atual.jpg';
 
-// Lista oficial com os nomes exatos da API da Google
-let LISTA_MODELOS = [
+const LISTA_MODELOS = [
     'gemini-3.8-flash',
     'gemini-3.8-flash-lite-preview',
     'gemini-3.8-pro-preview',
@@ -26,37 +27,79 @@ let LISTA_MODELOS = [
     'gemini-2.0-flash-lite'
 ];
 
-let qrCodeAtual = null;
-let statusConexao = 'Aguardando geração do QR Code...';
+let statusConexao = 'Iniciando...';
+let codigoPareamento = null;
+let sockGlobal = null;
 
-app.get('/', async (req, res) => {
+// Rota rápida para manter o servidor do Render acordado 24/7
+app.get('/ping', (req, res) => res.status(200).send('OK'));
+
+// Rota para gerar o código de 8 dígitos direto pelo navegador
+app.get('/gerar-codigo', async (req, res) => {
+    const num = (req.query.numero || MEU_NUMERO).replace(/\D/g, '');
+    if (!num || num.length < 10) {
+        return res.send('<h3>⚠️ Digite o número completo com DDI 55 e DDD (Ex: 5511999999999). <a href="/">Voltar</a></h3>');
+    }
+    try {
+        if (!sockGlobal) return res.send('<h3>O WhatsApp ainda está iniciando. Aguarde 5 segundos e tente novamente. <a href="/">Voltar</a></h3>');
+        codigoPareamento = await sockGlobal.requestPairingCode(num);
+        res.redirect('/');
+    } catch (err) {
+        res.send(`<h3>Erro ao gerar código: ${err.message}. <a href="/">Voltar</a></h3>`);
+    }
+});
+
+// Painel Principal (Sem QR Code, usando Código de 8 Dígitos)
+app.get('/', (req, res) => {
     if (statusConexao === 'Conectado!') {
         return res.send(`
             <div style="font-family: sans-serif; text-align: center; margin-top: 50px;">
-                <h1 style="color: #25D366;">🚀 MODO INTELIGENTE ATIVO!</h1>
-                <p>Modelos ativos na sua chave: ${LISTA_MODELOS.join(', ')}</p>
+                <h1 style="color: #25D366;">🔒 WHATSAPP CONECTADO E ESTÁVEL!</h1>
+                <p>Modo Privado Ativo (Voz + Imagem + PDF + Excel + Agenda + Web).</p>
             </div>
         `);
     }
-    if (qrCodeAtual) {
-        const qrImage = await QRCode.toDataURL(qrCodeAtual);
-        return res.send(`
-            <div style="font-family: sans-serif; text-align: center; margin-top: 40px;">
-                <h2>Escaneie o QR Code abaixo com o seu WhatsApp</h2>
-                <img src="${qrImage}" style="width: 300px; height: 300px; border: 2px solid #ccc; border-radius: 10px;"/>
-            </div>
-        `);
-    }
-    res.send(`<div style="font-family: sans-serif; text-align: center; margin-top: 50px;"><h2>Status: ${statusConexao}</h2></div>`);
+
+    res.send(`
+        <div style="font-family: sans-serif; max-width: 500px; margin: 40px auto; text-align: center; padding: 25px; border: 1px solid #ddd; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
+            <h2>📱 Conectar sem QR Code (Código de 8 Dígitos)</h2>
+            <p>Status atual: <strong>${statusConexao}</strong></p>
+            
+            ${codigoPareamento ? `
+                <div style="background: #e8f5e9; padding: 20px; border-radius: 10px; margin: 20px 0; border: 2px dashed #25D366;">
+                    <p style="margin: 0 0 10px 0; font-size: 14px; color: #333;">Digite este código no seu WhatsApp:</p>
+                    <h1 style="letter-spacing: 6px; color: #1b5e20; margin: 0; font-size: 36px;">${codigoPareamento}</h1>
+                </div>
+                <p style="font-size: 13px; color: #555; text-align: left; line-height: 1.5;">
+                    1. No WhatsApp do celular, vá em <b>Aparelhos Conectados > Conectar um aparelho</b>.<br>
+                    2. Na parte inferior da tela da câmera, toque em <b>"Conectar com número de telefone"</b>.<br>
+                    3. Digite os 8 dígitos acima!
+                </p>
+            ` : `
+                <form action="/gerar-codigo" method="GET" style="margin-top: 20px;">
+                    <p style="font-size: 14px; color: #555;">Digite seu número com <b>55 + DDD + Número</b> (apenas números):</p>
+                    <input type="text" name="numero" placeholder="Ex: 5511999999999" value="${MEU_NUMERO}" required style="padding: 12px; width: 80%; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; margin-bottom: 12px; text-align: center;" />
+                    <br>
+                    <button type="submit" style="padding: 12px 24px; font-size: 16px; background: #25D366; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Gerar Código de 8 Dígitos</button>
+                </form>
+            `}
+        </div>
+    `);
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`MODO AUTO-DESCOBERTA ATIVO na porta ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`MODO PARING CODE + ANTI-QUEDA ATIVO na porta ${PORT}`);
+    // Auto-Ping interno a cada 10 minutos para evitar hibernação
+    if (RENDER_EXTERNAL_URL) {
+        setInterval(() => {
+            fetch(`${RENDER_EXTERNAL_URL}/ping`).catch(() => {});
+        }, 10 * 60 * 1000);
+    }
+});
 
-// FUNÇÃO COM PAUSA INTELIGENTE (Espera a fila da Google esvaziar sem estourar sua cota!)
 async function chamarGeminiComRetry(parametros) {
     let ultimoErro = null;
 
-    // 1ª Tentativa: Tenta o modelo principal (gemini-3.8-flash) até 3 vezes com pausa progressiva (2s, 4s, 6s)
     for (let tentativa = 1; tentativa <= 3; tentativa++) {
         try {
             return await ai.models.generateContent({
@@ -67,7 +110,6 @@ async function chamarGeminiComRetry(parametros) {
             ultimoErro = err;
             const msg = err.message || "";
             if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand') || msg.includes('429')) {
-                console.log(`Servidor ocupado (Tentativa ${tentativa}/3). Aguardando ${tentativa * 2.5}s...`);
                 await new Promise(r => setTimeout(r, tentativa * 2500));
                 continue;
             }
@@ -75,10 +117,8 @@ async function chamarGeminiComRetry(parametros) {
         }
     }
 
-    // 2ª Tentativa (Reserva): Se o 3.8-flash continuar em pico, tenta os modelos alternativos oficiais
     for (const modeloReserva of LISTA_MODELOS.slice(1)) {
         try {
-            console.log(`Tentando modelo de reserva: ${modeloReserva}`);
             return await ai.models.generateContent({
                 ...parametros,
                 model: modeloReserva
@@ -102,7 +142,6 @@ function obterAgenda() {
         });
         return google.calendar({ version: 'v3', auth });
     } catch (err) {
-        console.error("Erro no formato do GOOGLE_CREDENTIALS_JSON:", err.message);
         return null;
     }
 }
@@ -155,7 +194,7 @@ async function criarEventoAgenda(titulo, dataHoraInicio, duracaoMinutos = 60, de
 
 function consultarPlanilhaExcel(termoBusca = "") {
     if (!fs.existsSync(EXCEL_PATH)) {
-        return "Nenhuma folha de cálculo foi enviada ainda. Envie um ficheiro .xlsx aqui no chat do WhatsApp.";
+        return "Nenhuma planilha foi enviada ainda. Envie um arquivo .xlsx aqui no chat do WhatsApp.";
     }
     try {
         const workbook = xlsx.readFile(EXCEL_PATH);
@@ -186,7 +225,7 @@ function consultarPlanilhaExcel(termoBusca = "") {
 
 async function consultarDocumentoPDF(pergunta = "Faça um resumo executivo completo deste documento PDF.") {
     if (!fs.existsSync(PDF_PATH)) {
-        return "Nenhum ficheiro PDF foi enviado ainda. Envie um documento .pdf aqui no chat do WhatsApp.";
+        return "Nenhum arquivo PDF foi enviado ainda. Envie um documento .pdf aqui no chat do WhatsApp.";
     }
     try {
         const base64Pdf = fs.readFileSync(PDF_PATH).toString('base64');
@@ -273,17 +312,17 @@ const ferramentas = [{
         },
         {
             name: "consultarPlanilhaExcel",
-            description: "Lê e pesquisa dados na folha de cálculo Excel enviada pelo utilizador no WhatsApp.",
+            description: "Lê e pesquisa dados na planilha Excel enviada pelo usuário no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou estado para filtrar (ou vazio para ver resumo geral)." }
+                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou status para filtrar (ou vazio para ver resumo geral)." }
                 }
             }
         },
         {
             name: "consultarDocumentoPDF",
-            description: "Lê, resume ou responde a perguntas sobre o último ficheiro PDF enviado pelo utilizador no WhatsApp.",
+            description: "Lê, resume ou responde perguntas sobre o último arquivo PDF enviado pelo usuário no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
@@ -294,7 +333,7 @@ const ferramentas = [{
         },
         {
             name: "consultarImagem",
-            description: "Lê, extrai textos/valores ou responde a perguntas sobre a última foto, fatura, print ou imagem enviada pelo utilizador no WhatsApp.",
+            description: "Lê, extrai textos/valores ou responde perguntas sobre a última foto, nota fiscal, print ou imagem enviada pelo usuário no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
@@ -305,11 +344,11 @@ const ferramentas = [{
         },
         {
             name: "listarEventosAgenda",
-            description: "Lista ou verifica a ligação com os compromissos do Google Calendar dos próximos dias.",
+            description: "Lista os compromissos do Google Calendar dos próximos dias.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    dias: { type: Type.NUMBER, description: "Quantidade de dias para procurar (padrão 7)." }
+                    dias: { type: Type.NUMBER, description: "Quantidade de dias para buscar (padrão 7)." }
                 }
             }
         },
@@ -342,11 +381,11 @@ SUAS CAPACIDADES PRINCIPAIS:
    - Se for apenas um áudio encaminhado ou informativo, entregue a transcrição completa e um resumo em tópicos.
 
 2. REESCRITA DE TEXTOS E E-MAILS:
-   - Sempre que o utilizador pedir para reescrever, melhorar ou redigir um texto, comunicado ou e-mail num tom específico (ex: executivo, formal, persuasivo, diplomático, direto), adapte o texto perfeitamente ao tom solicitado, pronto para copiar e colar.
+   - Sempre que o usuário pedir para reescrever, melhorar ou redigir um texto, comunicado ou e-mail num tom específico (ex: executivo, formal, persuasivo, diplomático, direto), adapte o texto perfeitamente ao tom solicitado, pronto para copiar e colar.
 
 3. FERRAMENTAS (WEB, EXCEL, PDF, IMAGEM E AGENDA):
-   - Para clima, jogos, notícias ou factos atuais: use "pesquisarNaInternet".
-   - Para dados da folha de cálculo Excel enviada: use "consultarPlanilhaExcel".
+   - Para clima, jogos, notícias ou fatos atuais: use "pesquisarNaInternet".
+   - Para dados da planilha Excel enviada: use "consultarPlanilhaExcel".
    - Para perguntas sobre o documento PDF enviado: use "consultarDocumentoPDF".
    - Para perguntas sobre a última foto/print/imagem enviada: use "consultarImagem".
    - Para compromissos na agenda: use "listarEventosAgenda" ou "criarEventoAgenda".
@@ -385,7 +424,6 @@ async function processarComIA(partesConteudo, textoReferencia = "") {
                 resultadoFerramenta = await criarEventoAgenda(call.args.titulo, call.args.dataHoraInicio, call.args.duracaoMinutos, call.args.descricao);
             }
 
-            // Pausa de 1.5s antes da segunda chamada para respeitar o limite gratuito da API
             await new Promise(r => setTimeout(r, 1500));
 
             response = await chamarGeminiComRetry({
@@ -406,29 +444,56 @@ async function processarComIA(partesConteudo, textoReferencia = "") {
 
 async function iniciarWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
+    const { version } = await fetchLatestBaileysVersion();
+
     const sock = makeWASocket({
+        version,
         auth: state,
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: true
+        printQRInTerminal: false,
+        browser: ['Ubuntu', 'Chrome', '20.0.04'], // Obrigatório para o Pairing Code funcionar com estabilidade
+        keepAliveIntervalMs: 30000,               // Mantém o túnel do WhatsApp vivo a cada 30s
+        syncFullHistory: false,                   // Economiza memória RAM do Render gratuito
+        markOnlineOnConnect: false
     });
 
+    sockGlobal = sock;
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
-        if (qr) {
-            qrCodeAtual = qr;
-            statusConexao = 'Aguardando leitura do QR Code...';
+
+        if (qr && !sock.authState.creds.registered) {
+            statusConexao = 'Pronto para gerar código de 8 dígitos';
+            // Se você definiu MEU_NUMERO no Environment do Render, ele já gera o código sozinho!
+            if (MEU_NUMERO && !codigoPareamento) {
+                try {
+                    const numLimpo = MEU_NUMERO.replace(/\D/g, '');
+                    codigoPareamento = await sock.requestPairingCode(numLimpo);
+                    console.log(`========================================`);
+                    console.log(`SEU CÓDIGO DE PAREAMENTO: ${codigoPareamento}`);
+                    console.log(`========================================`);
+                } catch (e) {
+                    console.error("Erro ao gerar código automático:", e.message);
+                }
+            }
         }
+
         if (connection === 'open') {
-            qrCodeAtual = null;
+            codigoPareamento = null;
             statusConexao = 'Conectado!';
-            console.log('WhatsApp conectado em MODO AUTO-DESCOBERTA!');
+            console.log('WhatsApp conectado e blindado!');
         }
+
         if (connection === 'close') {
-            const deveReconectar = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            statusConexao = 'Desconectado. Reconectando...';
-            if (deveReconectar) iniciarWhatsApp();
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const deveReconectar = statusCode !== DisconnectReason.loggedOut;
+            statusConexao = 'Reconectando...';
+            if (deveReconectar) {
+                setTimeout(() => iniciarWhatsApp(), 4000);
+            } else {
+                statusConexao = 'Desconectado (Sessão encerrada no celular).';
+            }
         }
     });
 
@@ -459,7 +524,7 @@ async function iniciarWhatsApp() {
 
             const doc = conteudoMsg.documentMessage || conteudoMsg.documentWithCaptionMessage?.message?.documentMessage;
 
-            // 1. RECEBIMENTO DE PLANILHA EXCEL (.xlsx / .xls)
+            // 1. PLANILHA EXCEL
             if (doc && (doc.fileName?.toLowerCase().endsWith('.xlsx') || doc.fileName?.toLowerCase().endsWith('.xls'))) {
                 const buffer = await downloadMediaMessage(msg, 'buffer', {});
                 fs.writeFileSync(EXCEL_PATH, buffer);
@@ -474,7 +539,7 @@ async function iniciarWhatsApp() {
                 continue;
             }
 
-            // 2. RECEBIMENTO DE ARQUIVO PDF (.pdf)
+            // 2. ARQUIVO PDF
             if (doc && (doc.fileName?.toLowerCase().endsWith('.pdf') || doc.mimetype === 'application/pdf')) {
                 try {
                     const bufferPdf = await downloadMediaMessage(msg, 'buffer', {});
@@ -496,7 +561,7 @@ async function iniciarWhatsApp() {
                 continue;
             }
 
-            // 3. RECEBIMENTO DE IMAGEM / FOTO / PRINT
+            // 3. IMAGEM / FOTO
             const imgMsg = conteudoMsg.imageMessage;
             if (imgMsg) {
                 try {
@@ -506,7 +571,7 @@ async function iniciarWhatsApp() {
                     const legendaImg = imgMsg.caption?.trim();
                     const instrucaoImg = legendaImg
                         ? (legendaImg.startsWith('!') ? legendaImg.slice(1).trim() : legendaImg)
-                        : "Analise esta imagem com atenção: descreva o que vê, extraia todos os textos, tabelas, números ou valores importantes (como faturas, prints de ecrã, equipamentos ou documentos) e apresente um resumo organizado.";
+                        : "Analise esta imagem com atenção: descreva o que vê, extraia todos os textos, tabelas, números ou valores importantes e apresente um resumo organizado.";
 
                     const respostaImg = await consultarImagem(instrucaoImg);
                     await sock.sendMessage(destino, {
@@ -518,7 +583,7 @@ async function iniciarWhatsApp() {
                 continue;
             }
 
-            // 4. RECEBIMENTO DE ÁUDIO (Gravação de voz ou Áudio encaminhado)
+            // 4. ÁUDIO / VOZ
             const audioMsg = conteudoMsg.audioMessage;
             if (audioMsg) {
                 try {
@@ -539,13 +604,12 @@ async function iniciarWhatsApp() {
                 continue;
             }
 
-            // 5. RECEBIMENTO DE TEXTO (Comandos iniciados com "!")
+            // 5. TEXTO COM "!"
             if (!texto.startsWith('!')) continue;
 
             const perguntaLimpa = texto.slice(1).trim();
             if (!perguntaLimpa) continue;
 
-            // ATALHO DIRETO PARA TESTAR A AGENDA (Não depende da IA se você digitar !agenda)
             if (perguntaLimpa.toLowerCase() === 'agenda' || perguntaLimpa.toLowerCase() === 'conectar na minha agenda') {
                 const statusAgenda = await listarEventosAgenda(7);
                 await sock.sendMessage(destino, { text: `🤖 *Assistente IA:*\n${statusAgenda}` });
