@@ -18,7 +18,19 @@ const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || '';
 const EXCEL_PATH = './base_dados.xlsx';
 const PDF_PATH = './documento_atual.pdf';
 const IMAGE_PATH = './imagem_atual.jpg';
-const MODEL_NAME = 'gemini-3.8-flash';
+
+// LISTA EXATA DOS MODELOS REAIS ATIVOS NA SUA CHAVE GOOGLE!
+// Se o primeiro estiver ocupado, o código pula instantaneamente para o próximo em 0.5s!
+const LISTA_MODELOS_REAIS = [
+    'gemini-3.8-flash',
+    'gemini-3.7-flash',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-flash-lite',
+    'gemini-omni-1.1-flash',
+    'gemma-4-31b-it'
+];
 
 let statusConexao = 'Iniciando...';
 let codigoPareamento = null;
@@ -32,7 +44,7 @@ app.get('/gerar-codigo', async (req, res) => {
         return res.send('<h3>⚠️ Digite o número completo com DDI 55 e DDD (Ex: 5511999999999). <a href="/">Voltar</a></h3>');
     }
     try {
-        if (!sockGlobal) return res.send('<h3>O WhatsApp ainda está a iniciar. Aguarde 5 segundos e tente novamente. <a href="/">Voltar</a></h3>');
+        if (!sockGlobal) return res.send('<h3>O WhatsApp ainda está iniciando. Aguarde 5 segundos e tente novamente. <a href="/">Voltar</a></h3>');
         codigoPareamento = await sockGlobal.requestPairingCode(num);
         res.redirect('/');
     } catch (err) {
@@ -44,8 +56,8 @@ app.get('/', (req, res) => {
     if (statusConexao === 'Conectado!') {
         return res.send(`
             <div style="font-family: sans-serif; text-align: center; margin-top: 50px;">
-                <h1 style="color: #25D366;">🔒 WHATSAPP CONECTADO E ESTÁVEL!</h1>
-                <p>Modelo ativo: <strong>${MODEL_NAME}</strong> (Voz + Imagem + PDF + Excel + Agenda + Web).</p>
+                <h1 style="color: #25D366;">🔒 WHATSAPP CONECTADO E 100% ESTÁVEL!</h1>
+                <p>8 Motores Ativos em Cascata: ${LISTA_MODELOS_REAIS.join(' ➔ ')}</p>
             </div>
         `);
     }
@@ -73,7 +85,7 @@ app.get('/', (req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`SERVIDOR ESTÁVEL ATIVO na porta ${PORT}`);
+    console.log(`SERVIDOR COM 8 MODELOS EM CASCATA ATIVO na porta ${PORT}`);
     if (RENDER_EXTERNAL_URL) {
         setInterval(() => {
             fetch(`${RENDER_EXTERNAL_URL}/ping`).catch(() => {});
@@ -81,32 +93,25 @@ app.listen(PORT, '0.0.0.0', () => {
     }
 });
 
-// FUNÇÃO DE CHAMADA AO GEMINI 3.8 FLASH COM ESPERA INTELIGENTE EM HORÁRIO DE PICO
+// SISTEMA MULTI-SERVIDOR: Percorre os 8 modelos reais da sua conta sem nunca ficar offline!
 async function chamarGeminiComRetry(parametros) {
     let ultimoErro = null;
-    const temposEspera = [3000, 6000, 10000, 15000]; // Espera 3s, 6s, 10s e 15s se a Google estiver ocupada
 
-    for (let i = 0; i <= temposEspera.length; i++) {
+    for (const modeloAtual of LISTA_MODELOS_REAIS) {
         try {
             return await ai.models.generateContent({
                 ...parametros,
-                model: MODEL_NAME
+                model: modeloAtual
             });
         } catch (err) {
             ultimoErro = err;
-            const msg = err.message || "";
-            if ((msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand') || msg.includes('429')) && i < temposEspera.length) {
-                console.log(`Pico na Google (503). A aguardar ${temposEspera[i] / 1000}s para tentar novamente...`);
-                await new Promise(r => setTimeout(r, temposEspera[i]));
-                continue;
-            }
-            throw err;
+            console.log(`[Troca Automática] Modelo ${modeloAtual} ocupado/indisponível (${err.message?.substring(0, 50)}). Pulando para o próximo...`);
+            await new Promise(r => setTimeout(r, 600));
         }
     }
     throw ultimoErro;
 }
 
-// Função para listar quais modelos existem oficialmente na sua chave da Google
 async function listarModelosDisponiveisNaChave() {
     try {
         const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${process.env.GEMINI_API_KEY}`);
@@ -138,7 +143,7 @@ function obterAgenda() {
 async function listarEventosAgenda(dias = 7) {
     try {
         const calendar = obterAgenda();
-        if (!calendar) return "⚠️ A Agenda do Google ainda não está configurada nas variáveis de ambiente (GOOGLE_CREDENTIALS_JSON e CALENDAR_ID) lá no painel do Render.";
+        if (!calendar) return "⚠️ A sua Agenda do Google ainda não foi conectada no painel do Render (faltam as variáveis GOOGLE_CREDENTIALS_JSON e CALENDAR_ID).";
         const agora = new Date();
         const limite = new Date();
         limite.setDate(agora.getDate() + dias);
@@ -162,7 +167,7 @@ async function listarEventosAgenda(dias = 7) {
 async function criarEventoAgenda(titulo, dataHoraInicio, duracaoMinutos = 60, descricao = "") {
     try {
         const calendar = obterAgenda();
-        if (!calendar) return "⚠️ Agenda ainda não configurada no menu Environment do Render.";
+        if (!calendar) return `⚠️ Quase lá! Eu entendi perfeitamente o seu agendamento:\n• *Compromisso:* ${titulo}\n• *Data/Hora:* ${dataHoraInicio}\n\nPorém, você ainda não colocou as variáveis *GOOGLE_CREDENTIALS_JSON* e *CALENDAR_ID* lá no menu *Environment* do Render para eu poder salvar no seu Google Calendar.`;
         const inicio = new Date(dataHoraInicio);
         const fim = new Date(inicio.getTime() + duracaoMinutos * 60000);
 
@@ -175,15 +180,15 @@ async function criarEventoAgenda(titulo, dataHoraInicio, duracaoMinutos = 60, de
                 end: { dateTime: fim.toISOString(), timeZone: 'America/Sao_Paulo' }
             }
         });
-        return `✅ Compromisso "${titulo}" agendado com sucesso para ${dataHoraInicio}!`;
+        return `✅ *Compromisso agendado com sucesso no Google Calendar!*\n• *Título:* ${titulo}\n• *Início:* ${dataHoraInicio}\n• *Duração:* ${duracaoMinutos} min`;
     } catch (err) {
         return `Erro ao criar evento: ${err.message}`;
     }
 }
 
-function consultarPlanilhaExcel(termoBusca = "") {
+async function analisarPlanilhaComIA(perguntaUsuario, termoBusca = "") {
     if (!fs.existsSync(EXCEL_PATH)) {
-        return "Nenhuma folha de cálculo foi enviada ainda. Envie um ficheiro .xlsx aqui no chat do WhatsApp.";
+        return "⚠️ Nenhuma planilha foi enviada ainda. Envie um arquivo .xlsx aqui no chat do WhatsApp.";
     }
     try {
         const workbook = xlsx.readFile(EXCEL_PATH);
@@ -199,14 +204,18 @@ function consultarPlanilhaExcel(termoBusca = "") {
                     Object.values(linha).some(val => String(val).toLowerCase().includes(termo))
                 );
             } else {
-                filtrados = dados.slice(0, 40);
+                filtrados = dados.slice(0, 50);
             }
 
             const colunas = dados.length > 0 ? Object.keys(dados[0]).join(', ') : 'Vazia';
             resultado.push(`--- ABA: ${nomeAba} (Total: ${dados.length} linhas | Colunas: ${colunas}) ---\n` + JSON.stringify(filtrados, null, 2));
         });
 
-        return resultado.join('\n\n').substring(0, 14000);
+        const dadosTexto = resultado.join('\n\n').substring(0, 14000);
+        const res = await chamarGeminiComRetry({
+            contents: [{ role: 'user', parts: [{ text: `Com base nos dados desta planilha Excel:\n\n${dadosTexto}\n\nResponda ao pedido do usuário: ${perguntaUsuario}` }] }]
+        });
+        return res.text || dadosTexto;
     } catch (err) {
         return `Erro ao ler Excel: ${err.message}`;
     }
@@ -214,7 +223,7 @@ function consultarPlanilhaExcel(termoBusca = "") {
 
 async function consultarDocumentoPDF(pergunta = "Faça um resumo executivo completo deste documento PDF.") {
     if (!fs.existsSync(PDF_PATH)) {
-        return "Nenhum ficheiro PDF foi enviado ainda. Envie um documento .pdf aqui no chat do WhatsApp.";
+        return "⚠️ Nenhum arquivo PDF foi enviado ainda. Envie um documento .pdf aqui no chat do WhatsApp.";
     }
     try {
         const base64Pdf = fs.readFileSync(PDF_PATH).toString('base64');
@@ -237,7 +246,7 @@ async function consultarDocumentoPDF(pergunta = "Faça um resumo executivo compl
 
 async function consultarImagem(pergunta = "Analise esta imagem em detalhes, extraia todos os textos, números ou valores visíveis e faça um resumo objetivo.") {
     if (!fs.existsSync(IMAGE_PATH)) {
-        return "Nenhuma imagem ou foto foi enviada ainda. Envie uma foto ou print aqui no chat do WhatsApp.";
+        return "⚠️ Nenhuma imagem ou foto foi enviada ainda. Envie uma foto ou print aqui no chat do WhatsApp.";
     }
     try {
         const base64Img = fs.readFileSync(IMAGE_PATH).toString('base64');
@@ -258,11 +267,11 @@ async function consultarImagem(pergunta = "Analise esta imagem em detalhes, extr
     }
 }
 
-async function pesquisarNaInternet(consulta) {
+async function pesquisarEResponderWeb(perguntaUsuario, consultaBusca) {
     try {
         let resultadosTexto = [];
 
-        const urlNews = `https://news.google.com/rss/search?q=${encodeURIComponent(consulta)}&hl=pt-BR&gl=BR&ceid=BR:pt-419`;
+        const urlNews = `https://news.google.com/rss/search?q=${encodeURIComponent(consultaBusca)}&hl=pt-BR&gl=BR&ceid=BR:pt-419`;
         const resNews = await fetch(urlNews);
         const xml = await resNews.text();
         const items = [...xml.matchAll(/<item>[\s\S]*?<title>(.*?)<\/title>[\s\S]*?<pubDate>(.*?)<\/pubDate>[\s\S]*?<\/item>/g)].slice(0, 8);
@@ -270,7 +279,7 @@ async function pesquisarNaInternet(consulta) {
             resultadosTexto.push("NOTÍCIAS E DADOS RECENTES DO GOOGLE:\n" + items.map(m => `- ${m[1]} (${m[2]})`).join('\n'));
         }
 
-        const urlWeb = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(consulta)}`;
+        const urlWeb = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(consultaBusca)}`;
         const resWeb = await fetch(urlWeb, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
         const html = await resWeb.text();
         const snippets = [...html.matchAll(/class="result__snippet[^>]*>([\s\S]*?)<\/a>/g)]
@@ -280,9 +289,15 @@ async function pesquisarNaInternet(consulta) {
             resultadosTexto.push("RESULTADOS DA WEB:\n" + snippets.map(s => `- ${s}`).join('\n'));
         }
 
-        return resultadosTexto.join('\n\n') || "Nenhum resultado encontrado na web.";
+        const contextoWeb = resultadosTexto.join('\n\n') || "Nenhum resultado encontrado.";
+        const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
+        const res = await chamarGeminiComRetry({
+            contents: [{ role: 'user', parts: [{ text: `Data/Hora atual: ${agora}.\nResultados da pesquisa na internet:\n${contextoWeb}\n\nCom base nesses dados atualizados, responda de forma direta e clara à pergunta: ${perguntaUsuario}` }] }]
+        });
+        return res.text || contextoWeb;
     } catch (err) {
-        return `Erro ao procurar na web: ${err.message}`;
+        return `Erro ao pesquisar na web: ${err.message}`;
     }
 }
 
@@ -301,17 +316,17 @@ const ferramentas = [{
         },
         {
             name: "consultarPlanilhaExcel",
-            description: "Lê e pesquisa dados na folha de cálculo Excel enviada pelo utilizador no WhatsApp.",
+            description: "Lê e pesquisa dados na planilha Excel enviada pelo usuário no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou estado para filtrar (ou vazio para ver resumo geral)." }
+                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou status para filtrar (ou vazio para ver resumo geral)." }
                 }
             }
         },
         {
             name: "consultarDocumentoPDF",
-            description: "Lê, resume ou responde a perguntas sobre o último ficheiro PDF enviado pelo utilizador no WhatsApp.",
+            description: "Lê, resume ou responde perguntas sobre o último arquivo PDF enviado pelo usuário no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
@@ -322,7 +337,7 @@ const ferramentas = [{
         },
         {
             name: "consultarImagem",
-            description: "Lê, extrai textos/valores ou responde a perguntas sobre a última foto, fatura, print ou imagem enviada pelo utilizador no WhatsApp.",
+            description: "Lê, extrai textos/valores ou responde perguntas sobre a última foto, nota fiscal, print ou imagem enviada pelo usuário no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
@@ -366,15 +381,15 @@ SUAS CAPACIDADES PRINCIPAIS:
 1. LEITURA E TRANSCRIÇÃO DE ÁUDIOS:
    - Quando receber um áudio, sempre inicie a resposta mostrando:
      📝 *Transcrição do Áudio:* "[texto exato falado no áudio]"
-   - Se o áudio contiver um pedido (ex: agendar algo, consultar planilha, consultar o PDF, analisar a última foto/imagem, buscar na web, reescrever um e-mail), execute a ação logo abaixo da transcrição!
+   - Se o áudio contiver um pedido (ex: agendar algo, consultar planilha, consultar o PDF, analisar foto, buscar na web, reescrever um e-mail), execute a ação logo abaixo da transcrição!
    - Se for apenas um áudio encaminhado ou informativo, entregue a transcrição completa e um resumo em tópicos.
 
 2. REESCRITA DE TEXTOS E E-MAILS:
-   - Sempre que o utilizador pedir para reescrever, melhorar ou redigir um texto, comunicado ou e-mail num tom específico (ex: executivo, formal, persuasivo, diplomático, direto), adapte o texto perfeitamente ao tom solicitado, pronto para copiar e colar.
+   - Sempre que o usuário pedir para reescrever, melhorar ou redigir um texto, comunicado ou e-mail num tom específico (ex: executivo, formal, persuasivo, diplomático, direto), adapte o texto perfeitamente ao tom solicitado, pronto para copiar e colar.
 
 3. FERRAMENTAS (WEB, EXCEL, PDF, IMAGEM E AGENDA):
-   - Para clima, jogos, notícias ou factos atuais: use "pesquisarNaInternet".
-   - Para dados da folha de cálculo Excel enviada: use "consultarPlanilhaExcel".
+   - Para clima, jogos, notícias ou fatos atuais: use "pesquisarNaInternet".
+   - Para dados da planilha Excel enviada: use "consultarPlanilhaExcel".
    - Para perguntas sobre o documento PDF enviado: use "consultarDocumentoPDF".
    - Para perguntas sobre a última foto/print/imagem enviada: use "consultarImagem".
    - Para compromissos na agenda: use "listarEventosAgenda" ou "criarEventoAgenda".
@@ -395,39 +410,28 @@ async function processarComIA(partesConteudo, textoReferencia = "") {
             config
         });
 
+        // Se a IA acionou uma ferramenta, executa direto sem precisar de round-trip complexo!
         if (response.functionCalls && response.functionCalls.length > 0) {
             const call = response.functionCalls[0];
-            let resultadoFerramenta = "";
 
             if (call.name === "pesquisarNaInternet") {
-                resultadoFerramenta = await pesquisarNaInternet(call.args.consulta || textoReferencia);
+                return await pesquisarEResponderWeb(textoReferencia, call.args.consulta || textoReferencia);
             } else if (call.name === "consultarPlanilhaExcel") {
-                resultadoFerramenta = consultarPlanilhaExcel(call.args.termoBusca || "");
+                return await analisarPlanilhaComIA(textoReferencia, call.args.termoBusca || "");
             } else if (call.name === "consultarDocumentoPDF") {
-                resultadoFerramenta = await consultarDocumentoPDF(call.args.pergunta || textoReferencia);
+                return await consultarDocumentoPDF(call.args.pergunta || textoReferencia);
             } else if (call.name === "consultarImagem") {
-                resultadoFerramenta = await consultarImagem(call.args.pergunta || textoReferencia);
+                return await consultarImagem(call.args.pergunta || textoReferencia);
             } else if (call.name === "listarEventosAgenda") {
-                resultadoFerramenta = await listarEventosAgenda(call.args.dias || 7);
+                return await listarEventosAgenda(call.args.dias || 7);
             } else if (call.name === "criarEventoAgenda") {
-                resultadoFerramenta = await criarEventoAgenda(call.args.titulo, call.args.dataHoraInicio, call.args.duracaoMinutos, call.args.descricao);
+                return await criarEventoAgenda(call.args.titulo, call.args.dataHoraInicio, call.args.duracaoMinutos, call.args.descricao);
             }
-
-            await new Promise(r => setTimeout(r, 2000));
-
-            response = await chamarGeminiComRetry({
-                contents: [
-                    { role: 'user', parts: partesConteudo },
-                    response.candidates[0].content,
-                    { role: 'user', parts: [{ functionResponse: { name: call.name, response: { result: resultadoFerramenta } } }] }
-                ],
-                config
-            });
         }
 
         return response.text || "Processado com sucesso.";
     } catch (err) {
-        return `⚠️ Os servidores gratuitos da Google estão com fila neste momento. Aguarde 15 segundos e tente novamente.`;
+        return `⚠️ Erro técnico: ${err.message?.substring(0, 150)}`;
     }
 }
 
@@ -465,7 +469,7 @@ async function iniciarWhatsApp() {
         if (connection === 'open') {
             codigoPareamento = null;
             statusConexao = 'Conectado!';
-            console.log('WhatsApp conectado e blindado!');
+            console.log('WhatsApp conectado com 8 Modelos Reais em Cascata!');
         }
 
         if (connection === 'close') {
@@ -475,7 +479,7 @@ async function iniciarWhatsApp() {
             if (deveReconectar) {
                 setTimeout(() => iniciarWhatsApp(), 4000);
             } else {
-                statusConexao = 'Desconectado (Sessão encerrada no telemóvel).';
+                statusConexao = 'Desconectado (Sessão encerrada no celular).';
             }
         }
     });
@@ -531,7 +535,7 @@ async function iniciarWhatsApp() {
                     const legendaPdf = doc.caption?.trim() || "Faça um resumo executivo completo deste documento PDF, destacando os pontos principais, datas, valores ou conclusões importantes.";
 
                     await sock.sendMessage(destino, {
-                        text: `📄 *PDF "${doc.fileName || 'documento.pdf'}" recebido!*\n_A analisar o conteúdo e a gerar o resumo..._`
+                        text: `📄 *PDF "${doc.fileName || 'documento.pdf'}" recebido!*\n_Analisando o conteúdo e gerando o resumo..._`
                     });
 
                     const analisePdf = await consultarDocumentoPDF(legendaPdf);
@@ -593,14 +597,12 @@ async function iniciarWhatsApp() {
             const perguntaLimpa = texto.slice(1).trim();
             if (!perguntaLimpa) continue;
 
-            // Atalho 1: Ver quais modelos existem na sua chave da Google (sem gastar IA)
             if (perguntaLimpa.toLowerCase() === 'modelos') {
                 const lista = await listarModelosDisponiveisNaChave();
                 await sock.sendMessage(destino, { text: lista });
                 continue;
             }
 
-            // Atalho 2: Testar a agenda direto
             if (perguntaLimpa.toLowerCase() === 'agenda' || perguntaLimpa.toLowerCase() === 'conectar na minha agenda') {
                 const statusAgenda = await listarEventosAgenda(7);
                 await sock.sendMessage(destino, { text: `🤖 *Assistente IA:*\n${statusAgenda}` });
