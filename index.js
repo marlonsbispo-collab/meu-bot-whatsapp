@@ -17,12 +17,13 @@ const EXCEL_PATH = './base_dados.xlsx';
 const PDF_PATH = './documento_atual.pdf';
 const IMAGE_PATH = './imagem_atual.jpg';
 
-// LISTA DE MODELOS EM CASCATA (Se o 1º estiver ocupado com erro 503, usa o seguinte automaticamente!)
-const LISTA_MODELOS = [
+// Lista oficial com os nomes exatos da API da Google
+let LISTA_MODELOS = [
     'gemini-3.8-flash',
-    'gemini-3.8-flash-lite',
-    'gemini-3.8-pro',
-    'gemini-2.5-pro'
+    'gemini-3.8-flash-lite-preview',
+    'gemini-3.8-pro-preview',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite'
 ];
 
 let qrCodeAtual = null;
@@ -32,8 +33,8 @@ app.get('/', async (req, res) => {
     if (statusConexao === 'Conectado!') {
         return res.send(`
             <div style="font-family: sans-serif; text-align: center; margin-top: 50px;">
-                <h1 style="color: #25D366;">🚀 MODO ANTI-QUEDA (MULTI-MODELOS) ATIVO!</h1>
-                <p>O seu Agente IA analisa Fotos/Prints, PDFs, Áudios, Planilhas Excel, Agenda, Web e Reescreve Textos.</p>
+                <h1 style="color: #25D366;">🚀 MODO INTELIGENTE ATIVO!</h1>
+                <p>Modelos ativos na sua chave: ${LISTA_MODELOS.join(', ')}</p>
             </div>
         `);
     }
@@ -49,56 +50,67 @@ app.get('/', async (req, res) => {
     res.send(`<div style="font-family: sans-serif; text-align: center; margin-top: 50px;"><h2>Status: ${statusConexao}</h2></div>`);
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`MODO MULTI-MODELOS ATIVO na porta ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`MODO AUTO-DESCOBERTA ATIVO na porta ${PORT}`));
 
-// FUNÇÃO INTELIGENTE COM ROTAÇÃO DE MODELOS (Evita erro 503 de sobrecarga!)
+// FUNÇÃO COM PAUSA INTELIGENTE (Espera a fila da Google esvaziar sem estourar sua cota!)
 async function chamarGeminiComRetry(parametros) {
     let ultimoErro = null;
 
-    // Faz até 2 passagens completas pela lista de modelos
-    for (let rodada = 0; rodada < 2; rodada++) {
-        for (const modeloTeste of LISTA_MODELOS) {
-            try {
-                return await ai.models.generateContent({
-                    ...parametros,
-                    model: modeloTeste
-                });
-            } catch (err) {
-                ultimoErro = err;
-                const msg = err.message || "";
-                // Se o modelo não existir na conta (404), pula imediatamente para o próximo da lista
-                if (msg.includes('404') || msg.includes('NOT_FOUND') || msg.includes('no longer available')) {
-                    continue;
-                }
-                // Se estiver ocupado (503 / 429), espera 1.5s e tenta o próximo modelo da lista
-                if (msg.includes('503') || msg.includes('429') || msg.includes('UNAVAILABLE') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('high demand')) {
-                    console.log(`Modelo ${modeloTeste} ocupado (503). Alternando automaticamente para o próximo...`);
-                    await new Promise(r => setTimeout(r, 1500));
-                    continue;
-                }
-                throw err;
+    // 1ª Tentativa: Tenta o modelo principal (gemini-3.8-flash) até 3 vezes com pausa progressiva (2s, 4s, 6s)
+    for (let tentativa = 1; tentativa <= 3; tentativa++) {
+        try {
+            return await ai.models.generateContent({
+                ...parametros,
+                model: 'gemini-3.8-flash'
+            });
+        } catch (err) {
+            ultimoErro = err;
+            const msg = err.message || "";
+            if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand') || msg.includes('429')) {
+                console.log(`Servidor ocupado (Tentativa ${tentativa}/3). Aguardando ${tentativa * 2.5}s...`);
+                await new Promise(r => setTimeout(r, tentativa * 2500));
+                continue;
             }
+            break;
         }
-        // Pequena pausa antes da segunda rodada, caso todos estejam em pico
-        await new Promise(r => setTimeout(r, 2500));
     }
+
+    // 2ª Tentativa (Reserva): Se o 3.8-flash continuar em pico, tenta os modelos alternativos oficiais
+    for (const modeloReserva of LISTA_MODELOS.slice(1)) {
+        try {
+            console.log(`Tentando modelo de reserva: ${modeloReserva}`);
+            return await ai.models.generateContent({
+                ...parametros,
+                model: modeloReserva
+            });
+        } catch (err) {
+            ultimoErro = err;
+            await new Promise(r => setTimeout(r, 1500));
+        }
+    }
+
     throw ultimoErro;
 }
 
 function obterAgenda() {
     if (!GOOGLE_CREDENTIALS_JSON) return null;
-    const credentials = JSON.parse(GOOGLE_CREDENTIALS_JSON);
-    const auth = new google.auth.GoogleAuth({
-        credentials,
-        scopes: ['https://www.googleapis.com/auth/calendar']
-    });
-    return google.calendar({ version: 'v3', auth });
+    try {
+        const credentials = JSON.parse(GOOGLE_CREDENTIALS_JSON);
+        const auth = new google.auth.GoogleAuth({
+            credentials,
+            scopes: ['https://www.googleapis.com/auth/calendar']
+        });
+        return google.calendar({ version: 'v3', auth });
+    } catch (err) {
+        console.error("Erro no formato do GOOGLE_CREDENTIALS_JSON:", err.message);
+        return null;
+    }
 }
 
 async function listarEventosAgenda(dias = 7) {
     try {
         const calendar = obterAgenda();
-        if (!calendar) return "Agenda ainda não configurada nas variáveis de ambiente.";
+        if (!calendar) return "⚠️ A Agenda do Google ainda não está configurada nas variáveis de ambiente (GOOGLE_CREDENTIALS_JSON e CALENDAR_ID) lá no painel do Render.";
         const agora = new Date();
         const limite = new Date();
         limite.setDate(agora.getDate() + dias);
@@ -112,8 +124,8 @@ async function listarEventosAgenda(dias = 7) {
         });
 
         const eventos = res.data.items;
-        if (!eventos || eventos.length === 0) return `Nenhum compromisso para os próximos ${dias} dias.`;
-        return eventos.map(e => `- ${e.start.dateTime || e.start.date}: ${e.summary}`).join('\n');
+        if (!eventos || eventos.length === 0) return `✅ Agenda conectada! Nenhum compromisso encontrado para os próximos ${dias} dias.`;
+        return `📅 *Compromissos dos próximos ${dias} dias:*\n` + eventos.map(e => `- ${e.start.dateTime || e.start.date}: ${e.summary}`).join('\n');
     } catch (err) {
         return `Erro ao consultar agenda: ${err.message}`;
     }
@@ -122,7 +134,7 @@ async function listarEventosAgenda(dias = 7) {
 async function criarEventoAgenda(titulo, dataHoraInicio, duracaoMinutos = 60, descricao = "") {
     try {
         const calendar = obterAgenda();
-        if (!calendar) return "Agenda ainda não configurada.";
+        if (!calendar) return "⚠️ Agenda ainda não configurada no menu Environment do Render.";
         const inicio = new Date(dataHoraInicio);
         const fim = new Date(inicio.getTime() + duracaoMinutos * 60000);
 
@@ -293,7 +305,7 @@ const ferramentas = [{
         },
         {
             name: "listarEventosAgenda",
-            description: "Lista os compromissos do Google Calendar dos próximos dias.",
+            description: "Lista ou verifica a ligação com os compromissos do Google Calendar dos próximos dias.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
@@ -373,6 +385,9 @@ async function processarComIA(partesConteudo, textoReferencia = "") {
                 resultadoFerramenta = await criarEventoAgenda(call.args.titulo, call.args.dataHoraInicio, call.args.duracaoMinutos, call.args.descricao);
             }
 
+            // Pausa de 1.5s antes da segunda chamada para respeitar o limite gratuito da API
+            await new Promise(r => setTimeout(r, 1500));
+
             response = await chamarGeminiComRetry({
                 contents: [
                     { role: 'user', parts: partesConteudo },
@@ -385,7 +400,7 @@ async function processarComIA(partesConteudo, textoReferencia = "") {
 
         return response.text || "Processado com sucesso.";
     } catch (err) {
-        return `⚠️ Todos os servidores da Google estão com pico neste segundo. Tente novamente em 10 segundos.`;
+        return `⚠️ Detalhe técnico da API: ${err.message?.substring(0, 120)}`;
     }
 }
 
@@ -408,7 +423,7 @@ async function iniciarWhatsApp() {
         if (connection === 'open') {
             qrCodeAtual = null;
             statusConexao = 'Conectado!';
-            console.log('WhatsApp conectado em MODO MULTI-MODELOS!');
+            console.log('WhatsApp conectado em MODO AUTO-DESCOBERTA!');
         }
         if (connection === 'close') {
             const deveReconectar = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -440,7 +455,7 @@ async function iniciarWhatsApp() {
             const texto = conteudoMsg.conversation ||
                           conteudoMsg.extendedTextMessage?.text || "";
 
-            if (texto.startsWith('🤖 *Assistente IA') || texto.startsWith('📊 *Planilha') || texto.startsWith('📄 *PDF') || texto.startsWith('📸 *Imagem')) continue;
+            if (texto.startsWith('🤖 *Assistente IA') || texto.startsWith('📊 *Planilha') || texto.startsWith('📄 *PDF') || texto.startsWith('📅 *Compromissos')) continue;
 
             const doc = conteudoMsg.documentMessage || conteudoMsg.documentWithCaptionMessage?.message?.documentMessage;
 
@@ -529,6 +544,13 @@ async function iniciarWhatsApp() {
 
             const perguntaLimpa = texto.slice(1).trim();
             if (!perguntaLimpa) continue;
+
+            // ATALHO DIRETO PARA TESTAR A AGENDA (Não depende da IA se você digitar !agenda)
+            if (perguntaLimpa.toLowerCase() === 'agenda' || perguntaLimpa.toLowerCase() === 'conectar na minha agenda') {
+                const statusAgenda = await listarEventosAgenda(7);
+                await sock.sendMessage(destino, { text: `🤖 *Assistente IA:*\n${statusAgenda}` });
+                continue;
+            }
 
             const resposta = await processarComIA([{ text: perguntaLimpa }], perguntaLimpa);
             await sock.sendMessage(destino, { text: `🤖 *Assistente IA:*\n${resposta}` });
