@@ -16,7 +16,14 @@ const GOOGLE_CREDENTIALS_JSON = process.env.GOOGLE_CREDENTIALS_JSON;
 const EXCEL_PATH = './base_dados.xlsx';
 const PDF_PATH = './documento_atual.pdf';
 const IMAGE_PATH = './imagem_atual.jpg';
-const MODEL_NAME = 'gemini-3.8-flash';
+
+// LISTA DE MODELOS EM CASCATA (Se o 1º estiver ocupado com erro 503, usa o seguinte automaticamente!)
+const LISTA_MODELOS = [
+    'gemini-3.8-flash',
+    'gemini-3.8-flash-lite',
+    'gemini-3.8-pro',
+    'gemini-2.5-pro'
+];
 
 let qrCodeAtual = null;
 let statusConexao = 'Aguardando geração do QR Code...';
@@ -25,7 +32,7 @@ app.get('/', async (req, res) => {
     if (statusConexao === 'Conectado!') {
         return res.send(`
             <div style="font-family: sans-serif; text-align: center; margin-top: 50px;">
-                <h1 style="color: #25D366;">📸 MODO COMPLETO (VOZ + IMAGEM + PDF + EXCEL + WEB) ATIVO!</h1>
+                <h1 style="color: #25D366;">🚀 MODO ANTI-QUEDA (MULTI-MODELOS) ATIVO!</h1>
                 <p>O seu Agente IA analisa Fotos/Prints, PDFs, Áudios, Planilhas Excel, Agenda, Web e Reescreve Textos.</p>
             </div>
         `);
@@ -42,7 +49,41 @@ app.get('/', async (req, res) => {
     res.send(`<div style="font-family: sans-serif; text-align: center; margin-top: 50px;"><h2>Status: ${statusConexao}</h2></div>`);
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`MODO COMPLETO (VOZ + IMAGEM + PDF + WEB) ATIVO na porta ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`MODO MULTI-MODELOS ATIVO na porta ${PORT}`));
+
+// FUNÇÃO INTELIGENTE COM ROTAÇÃO DE MODELOS (Evita erro 503 de sobrecarga!)
+async function chamarGeminiComRetry(parametros) {
+    let ultimoErro = null;
+
+    // Faz até 2 passagens completas pela lista de modelos
+    for (let rodada = 0; rodada < 2; rodada++) {
+        for (const modeloTeste of LISTA_MODELOS) {
+            try {
+                return await ai.models.generateContent({
+                    ...parametros,
+                    model: modeloTeste
+                });
+            } catch (err) {
+                ultimoErro = err;
+                const msg = err.message || "";
+                // Se o modelo não existir na conta (404), pula imediatamente para o próximo da lista
+                if (msg.includes('404') || msg.includes('NOT_FOUND') || msg.includes('no longer available')) {
+                    continue;
+                }
+                // Se estiver ocupado (503 / 429), espera 1.5s e tenta o próximo modelo da lista
+                if (msg.includes('503') || msg.includes('429') || msg.includes('UNAVAILABLE') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('high demand')) {
+                    console.log(`Modelo ${modeloTeste} ocupado (503). Alternando automaticamente para o próximo...`);
+                    await new Promise(r => setTimeout(r, 1500));
+                    continue;
+                }
+                throw err;
+            }
+        }
+        // Pequena pausa antes da segunda rodada, caso todos estejam em pico
+        await new Promise(r => setTimeout(r, 2500));
+    }
+    throw ultimoErro;
+}
 
 function obterAgenda() {
     if (!GOOGLE_CREDENTIALS_JSON) return null;
@@ -102,7 +143,7 @@ async function criarEventoAgenda(titulo, dataHoraInicio, duracaoMinutos = 60, de
 
 function consultarPlanilhaExcel(termoBusca = "") {
     if (!fs.existsSync(EXCEL_PATH)) {
-        return "Nenhuma planilha foi enviada ainda. Envie um arquivo .xlsx aqui no chat do WhatsApp.";
+        return "Nenhuma folha de cálculo foi enviada ainda. Envie um ficheiro .xlsx aqui no chat do WhatsApp.";
     }
     try {
         const workbook = xlsx.readFile(EXCEL_PATH);
@@ -131,28 +172,13 @@ function consultarPlanilhaExcel(termoBusca = "") {
     }
 }
 
-async function chamarGeminiComRetry(parametros, tentativas = 4) {
-    for (let i = 0; i < tentativas; i++) {
-        try {
-            return await ai.models.generateContent(parametros);
-        } catch (err) {
-            if ((err.message?.includes('503') || err.message?.includes('429') || err.message?.includes('UNAVAILABLE') || err.message?.includes('RESOURCE_EXHAUSTED')) && i < tentativas - 1) {
-                await new Promise(r => setTimeout(r, 3500));
-                continue;
-            }
-            throw err;
-        }
-    }
-}
-
 async function consultarDocumentoPDF(pergunta = "Faça um resumo executivo completo deste documento PDF.") {
     if (!fs.existsSync(PDF_PATH)) {
-        return "Nenhum arquivo PDF foi enviado ainda. Envie um documento .pdf aqui no chat do WhatsApp.";
+        return "Nenhum ficheiro PDF foi enviado ainda. Envie um documento .pdf aqui no chat do WhatsApp.";
     }
     try {
         const base64Pdf = fs.readFileSync(PDF_PATH).toString('base64');
         const res = await chamarGeminiComRetry({
-            model: MODEL_NAME,
             contents: [
                 {
                     role: 'user',
@@ -169,7 +195,6 @@ async function consultarDocumentoPDF(pergunta = "Faça um resumo executivo compl
     }
 }
 
-// NOVA FUNÇÃO: Lê e analisa a última Foto / Imagem enviada no WhatsApp
 async function consultarImagem(pergunta = "Analise esta imagem em detalhes, extraia todos os textos, números ou valores visíveis e faça um resumo objetivo.") {
     if (!fs.existsSync(IMAGE_PATH)) {
         return "Nenhuma imagem ou foto foi enviada ainda. Envie uma foto ou print aqui no chat do WhatsApp.";
@@ -177,7 +202,6 @@ async function consultarImagem(pergunta = "Analise esta imagem em detalhes, extr
     try {
         const base64Img = fs.readFileSync(IMAGE_PATH).toString('base64');
         const res = await chamarGeminiComRetry({
-            model: MODEL_NAME,
             contents: [
                 {
                     role: 'user',
@@ -218,7 +242,7 @@ async function pesquisarNaInternet(consulta) {
 
         return resultadosTexto.join('\n\n') || "Nenhum resultado encontrado na web.";
     } catch (err) {
-        return `Erro ao buscar na web: ${err.message}`;
+        return `Erro ao procurar na web: ${err.message}`;
     }
 }
 
@@ -237,28 +261,28 @@ const ferramentas = [{
         },
         {
             name: "consultarPlanilhaExcel",
-            description: "Lê e pesquisa dados na planilha Excel enviada pelo usuário no WhatsApp.",
+            description: "Lê e pesquisa dados na folha de cálculo Excel enviada pelo utilizador no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou status para filtrar (ou vazio para ver resumo geral)." }
+                    termoBusca: { type: Type.STRING, description: "Palavra-chave, loja, nome ou estado para filtrar (ou vazio para ver resumo geral)." }
                 }
             }
         },
         {
             name: "consultarDocumentoPDF",
-            description: "Lê, resume ou responde perguntas sobre o último arquivo PDF enviado pelo usuário no WhatsApp.",
+            description: "Lê, resume ou responde a perguntas sobre o último ficheiro PDF enviado pelo utilizador no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    pergunta: { type: Type.STRING, description: "O que buscar, resumir ou responder com base no documento PDF." }
+                    pergunta: { type: Type.STRING, description: "O que procurar, resumir ou responder com base no documento PDF." }
                 },
                 required: ["pergunta"]
             }
         },
         {
             name: "consultarImagem",
-            description: "Lê, extrai textos/valores ou responde perguntas sobre a última foto, nota fiscal, print ou imagem enviada pelo usuário no WhatsApp.",
+            description: "Lê, extrai textos/valores ou responde a perguntas sobre a última foto, fatura, print ou imagem enviada pelo utilizador no WhatsApp.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
@@ -273,7 +297,7 @@ const ferramentas = [{
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    dias: { type: Type.NUMBER, description: "Quantidade de dias para buscar (padrão 7)." }
+                    dias: { type: Type.NUMBER, description: "Quantidade de dias para procurar (padrão 7)." }
                 }
             }
         },
@@ -306,11 +330,11 @@ SUAS CAPACIDADES PRINCIPAIS:
    - Se for apenas um áudio encaminhado ou informativo, entregue a transcrição completa e um resumo em tópicos.
 
 2. REESCRITA DE TEXTOS E E-MAILS:
-   - Sempre que o usuário pedir para reescrever, melhorar ou redigir um texto, comunicado ou e-mail em um tom específico (ex: executivo, formal, persuasivo, diplomático, direto), adapte o texto perfeitamente ao tom solicitado, pronto para copiar e colar.
+   - Sempre que o utilizador pedir para reescrever, melhorar ou redigir um texto, comunicado ou e-mail num tom específico (ex: executivo, formal, persuasivo, diplomático, direto), adapte o texto perfeitamente ao tom solicitado, pronto para copiar e colar.
 
 3. FERRAMENTAS (WEB, EXCEL, PDF, IMAGEM E AGENDA):
-   - Para clima, jogos, notícias ou fatos atuais: use "pesquisarNaInternet".
-   - Para dados da planilha Excel enviada: use "consultarPlanilhaExcel".
+   - Para clima, jogos, notícias ou factos atuais: use "pesquisarNaInternet".
+   - Para dados da folha de cálculo Excel enviada: use "consultarPlanilhaExcel".
    - Para perguntas sobre o documento PDF enviado: use "consultarDocumentoPDF".
    - Para perguntas sobre a última foto/print/imagem enviada: use "consultarImagem".
    - Para compromissos na agenda: use "listarEventosAgenda" ou "criarEventoAgenda".
@@ -327,7 +351,6 @@ async function processarComIA(partesConteudo, textoReferencia = "") {
         };
 
         let response = await chamarGeminiComRetry({
-            model: MODEL_NAME,
             contents: [{ role: 'user', parts: partesConteudo }],
             config
         });
@@ -351,7 +374,6 @@ async function processarComIA(partesConteudo, textoReferencia = "") {
             }
 
             response = await chamarGeminiComRetry({
-                model: MODEL_NAME,
                 contents: [
                     { role: 'user', parts: partesConteudo },
                     response.candidates[0].content,
@@ -363,7 +385,7 @@ async function processarComIA(partesConteudo, textoReferencia = "") {
 
         return response.text || "Processado com sucesso.";
     } catch (err) {
-        return `⚠️ A IA está ocupada neste segundo (${err.message?.substring(0, 60)}). Tente novamente em instantes.`;
+        return `⚠️ Todos os servidores da Google estão com pico neste segundo. Tente novamente em 10 segundos.`;
     }
 }
 
@@ -386,7 +408,7 @@ async function iniciarWhatsApp() {
         if (connection === 'open') {
             qrCodeAtual = null;
             statusConexao = 'Conectado!';
-            console.log('WhatsApp conectado em MODO COMPLETO (VOZ + IMAGEM + PDF + EXCEL + WEB)!');
+            console.log('WhatsApp conectado em MODO MULTI-MODELOS!');
         }
         if (connection === 'close') {
             const deveReconectar = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -469,7 +491,7 @@ async function iniciarWhatsApp() {
                     const legendaImg = imgMsg.caption?.trim();
                     const instrucaoImg = legendaImg
                         ? (legendaImg.startsWith('!') ? legendaImg.slice(1).trim() : legendaImg)
-                        : "Analise esta imagem com atenção: descreva o que vê, extraia todos os textos, tabelas, números ou valores importantes (como notas fiscais, prints de tela, equipamentos ou documentos) e apresente um resumo organizado.";
+                        : "Analise esta imagem com atenção: descreva o que vê, extraia todos os textos, tabelas, números ou valores importantes (como faturas, prints de ecrã, equipamentos ou documentos) e apresente um resumo organizado.";
 
                     const respostaImg = await consultarImagem(instrucaoImg);
                     await sock.sendMessage(destino, {
