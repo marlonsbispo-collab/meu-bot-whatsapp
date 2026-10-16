@@ -4,23 +4,20 @@ const pino = require('pino');
 const fs = require('fs');
 const xlsx = require('xlsx');
 const { GoogleGenAI, Type } = require('@google/genai');
-const { google } = require('googleapis');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const CALENDAR_ID = process.env.CALENDAR_ID || 'primary';
-const GOOGLE_CREDENTIALS_JSON = process.env.GOOGLE_CREDENTIALS_JSON;
 const MEU_NUMERO = process.env.MEU_NUMERO || '';
 const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || '';
 
 const EXCEL_PATH = './base_dados.xlsx';
 const PDF_PATH = './documento_atual.pdf';
 const IMAGE_PATH = './imagem_atual.jpg';
+const AGENDA_LOCAL_PATH = './agenda_local.json';
 
-// LISTA EXATA DOS MODELOS REAIS ATIVOS NA SUA CHAVE GOOGLE!
-// Se o primeiro estiver ocupado, o código pula instantaneamente para o próximo em 0.5s!
+// Lista oficial com os 8 modelos reais da sua chave Google
 const LISTA_MODELOS_REAIS = [
     'gemini-3.8-flash',
     'gemini-3.7-flash',
@@ -35,6 +32,7 @@ const LISTA_MODELOS_REAIS = [
 let statusConexao = 'Iniciando...';
 let codigoPareamento = null;
 let sockGlobal = null;
+let meuDestinoGlobal = null;
 
 app.get('/ping', (req, res) => res.status(200).send('OK'));
 
@@ -56,8 +54,8 @@ app.get('/', (req, res) => {
     if (statusConexao === 'Conectado!') {
         return res.send(`
             <div style="font-family: sans-serif; text-align: center; margin-top: 50px;">
-                <h1 style="color: #25D366;">🔒 WHATSAPP CONECTADO E 100% ESTÁVEL!</h1>
-                <p>8 Motores Ativos em Cascata: ${LISTA_MODELOS_REAIS.join(' ➔ ')}</p>
+                <h1 style="color: #25D366;">🔒 ASSISTENTE IA 100% ATIVA E COMPLETA!</h1>
+                <p>Voz + Imagem + PDF + Excel + Agenda Inteligente + Web em Tempo Real.</p>
             </div>
         `);
     }
@@ -85,7 +83,7 @@ app.get('/', (req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`SERVIDOR COM 8 MODELOS EM CASCATA ATIVO na porta ${PORT}`);
+    console.log(`ASSISTENTE COMPLETA (AGENDA PRÓPRIA + 8 MODELOS) ATIVA na porta ${PORT}`);
     if (RENDER_EXTERNAL_URL) {
         setInterval(() => {
             fetch(`${RENDER_EXTERNAL_URL}/ping`).catch(() => {});
@@ -93,7 +91,7 @@ app.listen(PORT, '0.0.0.0', () => {
     }
 });
 
-// SISTEMA MULTI-SERVIDOR: Percorre os 8 modelos reais da sua conta sem nunca ficar offline!
+// Sistema Multi-Modelos em Cascata
 async function chamarGeminiComRetry(parametros) {
     let ultimoErro = null;
 
@@ -105,87 +103,118 @@ async function chamarGeminiComRetry(parametros) {
             });
         } catch (err) {
             ultimoErro = err;
-            console.log(`[Troca Automática] Modelo ${modeloAtual} ocupado/indisponível (${err.message?.substring(0, 50)}). Pulando para o próximo...`);
+            console.log(`[Troca Automática] Modelo ${modeloAtual} ocupado. Pulando para o próximo...`);
             await new Promise(r => setTimeout(r, 600));
         }
     }
     throw ultimoErro;
 }
 
-async function listarModelosDisponiveisNaChave() {
+// ==========================================
+// SISTEMA DE AGENDA PRÓPRIA (SEM GOOGLE CLOUD)
+// ==========================================
+function lerAgendaLocal() {
+    if (!fs.existsSync(AGENDA_LOCAL_PATH)) return [];
     try {
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${process.env.GEMINI_API_KEY}`);
-        const data = await res.json();
-        if (!data.models) return `Resposta da API: ${JSON.stringify(data)}`;
-        const nomes = data.models
-            .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
-            .map(m => `• ${m.name.replace('models/', '')}`);
-        return `🤖 *Modelos ativos na sua chave Google:*\n${nomes.join('\n')}`;
-    } catch (err) {
-        return `Erro ao listar modelos: ${err.message}`;
+        return JSON.parse(fs.readFileSync(AGENDA_LOCAL_PATH, 'utf8'));
+    } catch (e) {
+        return [];
     }
 }
 
-function obterAgenda() {
-    if (!GOOGLE_CREDENTIALS_JSON) return null;
-    try {
-        const credentials = JSON.parse(GOOGLE_CREDENTIALS_JSON);
-        const auth = new google.auth.GoogleAuth({
-            credentials,
-            scopes: ['https://www.googleapis.com/auth/calendar']
-        });
-        return google.calendar({ version: 'v3', auth });
-    } catch (err) {
-        return null;
-    }
+function salvarAgendaLocal(eventos) {
+    fs.writeFileSync(AGENDA_LOCAL_PATH, JSON.stringify(eventos, null, 2));
 }
 
 async function listarEventosAgenda(dias = 7) {
-    try {
-        const calendar = obterAgenda();
-        if (!calendar) return "⚠️ A sua Agenda do Google ainda não foi conectada no painel do Render (faltam as variáveis GOOGLE_CREDENTIALS_JSON e CALENDAR_ID).";
-        const agora = new Date();
-        const limite = new Date();
-        limite.setDate(agora.getDate() + dias);
-
-        const res = await calendar.events.list({
-            calendarId: CALENDAR_ID,
-            timeMin: agora.toISOString(),
-            timeMax: limite.toISOString(),
-            singleEvents: true,
-            orderBy: 'startTime',
-        });
-
-        const eventos = res.data.items;
-        if (!eventos || eventos.length === 0) return `✅ Agenda conectada! Nenhum compromisso encontrado para os próximos ${dias} dias.`;
-        return `📅 *Compromissos dos próximos ${dias} dias:*\n` + eventos.map(e => `- ${e.start.dateTime || e.start.date}: ${e.summary}`).join('\n');
-    } catch (err) {
-        return `Erro ao consultar agenda: ${err.message}`;
+    const eventos = lerAgendaLocal();
+    if (eventos.length === 0) {
+        return "📅 *Sua Agenda está vazia no momento.*\nPara agendar algo, basta pedir por áudio ou texto (Ex: *!agende reunião amanhã às 14h*).";
     }
+
+    // Ordena por data/hora
+    eventos.sort((a, b) => new Date(a.isoInicio) - new Date(b.isoInicio));
+
+    const listaTexto = eventos.map((e, i) => {
+        const desc = e.descricao ? `\n   _${e.descricao}_` : '';
+        return `${i + 1}. 🕒 *${e.dataFormatada}* — *${e.titulo}*${desc}`;
+    }).join('\n\n');
+
+    return `📅 *Seus Compromissos Agendados:*\n\n${listaTexto}\n\n💡 _Para limpar compromissos antigos, envie *!limpar agenda*._`;
 }
 
 async function criarEventoAgenda(titulo, dataHoraInicio, duracaoMinutos = 60, descricao = "") {
     try {
-        const calendar = obterAgenda();
-        if (!calendar) return `⚠️ Quase lá! Eu entendi perfeitamente o seu agendamento:\n• *Compromisso:* ${titulo}\n• *Data/Hora:* ${dataHoraInicio}\n\nPorém, você ainda não colocou as variáveis *GOOGLE_CREDENTIALS_JSON* e *CALENDAR_ID* lá no menu *Environment* do Render para eu poder salvar no seu Google Calendar.`;
-        const inicio = new Date(dataHoraInicio);
-        const fim = new Date(inicio.getTime() + duracaoMinutos * 60000);
+        // Garante que a data seja interpretada no fuso horário de São Paulo (-03:00)
+        const isoComFuso = dataHoraInicio.includes('-03:00') || dataHoraInicio.endsWith('Z')
+            ? dataHoraInicio
+            : `${dataHoraInicio.slice(0, 19)}-03:00`;
 
-        await calendar.events.insert({
-            calendarId: CALENDAR_ID,
-            requestBody: {
-                summary: titulo,
-                description: descricao,
-                start: { dateTime: inicio.toISOString(), timeZone: 'America/Sao_Paulo' },
-                end: { dateTime: fim.toISOString(), timeZone: 'America/Sao_Paulo' }
-            }
+        const inicio = new Date(isoComFuso);
+        const fim = new Date(inicio.getTime() + (duracaoMinutos || 60) * 60000);
+
+        const dataFormatada = inicio.toLocaleString('pt-BR', {
+            timeZone: 'America/Sao_Paulo',
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
         });
-        return `✅ *Compromisso agendado com sucesso no Google Calendar!*\n• *Título:* ${titulo}\n• *Início:* ${dataHoraInicio}\n• *Duração:* ${duracaoMinutos} min`;
+
+        const eventos = lerAgendaLocal();
+        eventos.push({
+            id: Date.now(),
+            titulo,
+            isoInicio: inicio.toISOString(),
+            dataFormatada,
+            duracaoMinutos: duracaoMinutos || 60,
+            descricao: descricao || "",
+            notificado15min: false
+        });
+        salvarAgendaLocal(eventos);
+
+        // Gera link universal de 1 clique para o Google Calendar do celular
+        const fmt = (d) => d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+        const linkGoogleCalendar = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(titulo)}&dates=${fmt(inicio)}/${fmt(fim)}&details=${encodeURIComponent(descricao || 'Agendado via Assistente IA WhatsApp')}`;
+
+        return `✅ *Compromisso Agendado com Sucesso!*\n\n📌 *Assunto:* ${titulo}\n🗓️ *Data e Hora:* ${dataFormatada}\n⏱️ *Duração:* ${duracaoMinutos || 60} min\n🔔 *Lembrete:* Vou te mandar um aviso aqui no WhatsApp 15 minutos antes!\n\n📲 *Quer salvar também no calendário do celular? Toque no link abaixo:*\n${linkGoogleCalendar}`;
     } catch (err) {
-        return `Erro ao criar evento: ${err.message}`;
+        return `Erro ao agendar compromisso: ${err.message}`;
     }
 }
 
+// Despertador automático que verifica a cada 60 segundos se há compromisso próximo
+setInterval(async () => {
+    if (!sockGlobal || statusConexao !== 'Conectado!' || !meuDestinoGlobal) return;
+    try {
+        const eventos = lerAgendaLocal();
+        if (eventos.length === 0) return;
+
+        const agora = Date.now();
+        let alterou = false;
+
+        for (const ev of eventos) {
+            const tempoEvento = new Date(ev.isoInicio).getTime();
+            const diferencaMinutos = (tempoEvento - agora) / 60000;
+
+            // Se faltar entre 1 e 16 minutos para o evento e ainda não avisou
+            if (diferencaMinutos > 0 && diferencaMinutos <= 16 && !ev.notificado15min) {
+                ev.notificado15min = true;
+                alterou = true;
+                await sockGlobal.sendMessage(meuDestinoGlobal, {
+                    text: `🔔 *LEMBRETE DA SUA AGENDA!*\n\nO seu compromisso começa em cerca de *${Math.round(diferencaMinutos)} minutos*:\n📌 *${ev.titulo}*\n🕒 *Horário:* ${ev.dataFormatada}`
+                });
+            }
+        }
+
+        if (alterou) salvarAgendaLocal(eventos);
+    } catch (e) {}
+}, 60 * 1000);
+
+// ==========================================
+// FUNÇÕES DE PLANILHA EXCEL, PDF, IMAGEM E WEB
+// ==========================================
 async function analisarPlanilhaComIA(perguntaUsuario, termoBusca = "") {
     if (!fs.existsSync(EXCEL_PATH)) {
         return "⚠️ Nenhuma planilha foi enviada ainda. Envie um arquivo .xlsx aqui no chat do WhatsApp.";
@@ -348,17 +377,17 @@ const ferramentas = [{
         },
         {
             name: "listarEventosAgenda",
-            description: "Lista os compromissos do Google Calendar dos próximos dias.",
+            description: "Lista os compromissos agendados pelo usuário.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    dias: { type: Type.NUMBER, description: "Quantidade de dias para procurar (padrão 7)." }
+                    dias: { type: Type.NUMBER, description: "Quantidade de dias para buscar (padrão 7)." }
                 }
             }
         },
         {
             name: "criarEventoAgenda",
-            description: "Cria um novo compromisso no Google Calendar.",
+            description: "Cria e salva um novo compromisso na agenda do usuário.",
             parameters: {
                 type: Type.OBJECT,
                 properties: {
@@ -381,7 +410,7 @@ SUAS CAPACIDADES PRINCIPAIS:
 1. LEITURA E TRANSCRIÇÃO DE ÁUDIOS:
    - Quando receber um áudio, sempre inicie a resposta mostrando:
      📝 *Transcrição do Áudio:* "[texto exato falado no áudio]"
-   - Se o áudio contiver um pedido (ex: agendar algo, consultar planilha, consultar o PDF, analisar foto, buscar na web, reescrever um e-mail), execute a ação logo abaixo da transcrição!
+   - Se o áudio contiver um pedido (ex: agendar algo, consultar planilha, consultar o PDF, analisar foto, buscar na web, reescrever um e-mail), execute a ação ou acione a ferramenta correspondente!
    - Se for apenas um áudio encaminhado ou informativo, entregue a transcrição completa e um resumo em tópicos.
 
 2. REESCRITA DE TEXTOS E E-MAILS:
@@ -392,7 +421,7 @@ SUAS CAPACIDADES PRINCIPAIS:
    - Para dados da planilha Excel enviada: use "consultarPlanilhaExcel".
    - Para perguntas sobre o documento PDF enviado: use "consultarDocumentoPDF".
    - Para perguntas sobre a última foto/print/imagem enviada: use "consultarImagem".
-   - Para compromissos na agenda: use "listarEventosAgenda" ou "criarEventoAgenda".
+   - Para ver ou marcar compromissos na agenda: use "listarEventosAgenda" ou "criarEventoAgenda".
 
 Responda de forma organizada e formatada para leitura rápida no WhatsApp.`;
 };
@@ -410,7 +439,6 @@ async function processarComIA(partesConteudo, textoReferencia = "") {
             config
         });
 
-        // Se a IA acionou uma ferramenta, executa direto sem precisar de round-trip complexo!
         if (response.functionCalls && response.functionCalls.length > 0) {
             const call = response.functionCalls[0];
 
@@ -469,7 +497,9 @@ async function iniciarWhatsApp() {
         if (connection === 'open') {
             codigoPareamento = null;
             statusConexao = 'Conectado!';
-            console.log('WhatsApp conectado com 8 Modelos Reais em Cascata!');
+            const meuNum = sock.user?.id ? sock.user.id.split(':')[0].split('@')[0] : "";
+            if (meuNum) meuDestinoGlobal = `${meuNum}@s.whatsapp.net`;
+            console.log('WhatsApp conectado com Agenda Própria + 8 Modelos!');
         }
 
         if (connection === 'close') {
@@ -502,12 +532,13 @@ async function iniciarWhatsApp() {
             if (!ehConversaComigoMesmo) continue;
 
             const destino = meuNumeroLimpo ? `${meuNumeroLimpo}@s.whatsapp.net` : remetente;
+            meuDestinoGlobal = destino;
             const conteudoMsg = msg.message.ephemeralMessage?.message || msg.message;
 
             const texto = conteudoMsg.conversation ||
                           conteudoMsg.extendedTextMessage?.text || "";
 
-            if (texto.startsWith('🤖 *Assistente IA') || texto.startsWith('🤖 *Modelos ativos') || texto.startsWith('📊 *Planilha') || texto.startsWith('📄 *PDF') || texto.startsWith('📅 *Compromissos')) continue;
+            if (texto.startsWith('🤖 *Assistente IA') || texto.startsWith('🔔 *LEMBRETE') || texto.startsWith('📊 *Planilha') || texto.startsWith('📄 *PDF') || texto.startsWith('📅 *Seus Compromissos')) continue;
 
             const doc = conteudoMsg.documentMessage || conteudoMsg.documentWithCaptionMessage?.message?.documentMessage;
 
@@ -580,7 +611,7 @@ async function iniciarWhatsApp() {
 
                     const partesAudio = [
                         { inlineData: { mimeType: mimeType, data: base64Audio } },
-                        { text: "Transcreva este áudio em português. Em seguida, se houver algum pedido, pergunta, consulta de planilha Excel, consulta do documento PDF, análise da imagem enviada, agendamento, busca na internet ou pedido para reescrever texto/e-mail contido no áudio, execute-o completamente!" }
+                        { text: "Transcreva este áudio em português. Em seguida, se houver algum pedido, pergunta, consulta de planilha Excel, consulta do documento PDF, análise da imagem enviada, agendamento de compromisso, busca na internet ou pedido para reescrever texto/e-mail contido no áudio, execute-o completamente!" }
                     ];
 
                     const respostaAudio = await processarComIA(partesAudio, "Comando por áudio");
@@ -597,13 +628,13 @@ async function iniciarWhatsApp() {
             const perguntaLimpa = texto.slice(1).trim();
             if (!perguntaLimpa) continue;
 
-            if (perguntaLimpa.toLowerCase() === 'modelos') {
-                const lista = await listarModelosDisponiveisNaChave();
-                await sock.sendMessage(destino, { text: lista });
+            if (perguntaLimpa.toLowerCase() === 'limpar agenda') {
+                salvarAgendaLocal([]);
+                await sock.sendMessage(destino, { text: `🤖 *Assistente IA:*\n🗑️ Todos os compromissos da agenda foram apagados com sucesso!` });
                 continue;
             }
 
-            if (perguntaLimpa.toLowerCase() === 'agenda' || perguntaLimpa.toLowerCase() === 'conectar na minha agenda') {
+            if (perguntaLimpa.toLowerCase() === 'agenda') {
                 const statusAgenda = await listarEventosAgenda(7);
                 await sock.sendMessage(destino, { text: `🤖 *Assistente IA:*\n${statusAgenda}` });
                 continue;
